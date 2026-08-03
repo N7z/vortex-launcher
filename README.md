@@ -42,7 +42,8 @@ cargo build --release
 
 1. Fetches the latest GE-Proton release from GitHub, verifies its sha512, unpacks it.
 2. Downloads `Vortex-Windows.zip` (resumable) and extracts `Vortex.exe`.
-3. Runs the game with `proton run`, with `STEAM_COMPAT_DATA_PATH` pointing at a
+3. Asks you to sign in.
+4. Runs the game with `proton run`, with `STEAM_COMPAT_DATA_PATH` pointing at a
    prefix owned by this launcher.
 
 An existing Steam or `compatibilitytools.d` Proton is picked up and reused instead
@@ -57,7 +58,9 @@ $XDG_DATA_HOME/vortex-launcher/
     prefix/         the wine prefix (pfx/ inside)
     compat-client/  STEAM_COMPAT_CLIENT_INSTALL_PATH stand-in
     downloads/      partial downloads, resumed on the next run
-    logs/game.log   last session's game output
+    session.json    your session token, mode 0600
+    logs/game.log       last session's game output
+    logs/launcher.log   what the launcher itself did
 $XDG_CONFIG_HOME/vortex-launcher/config.json
 ```
 

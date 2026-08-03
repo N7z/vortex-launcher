@@ -15,7 +15,7 @@ use crate::state::Shared;
 
 const LATEST_RELEASE: &str = "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest";
 
-/// where steam keeps proton builds, newest wins
+/// where steam keeps proton builds
 fn system_candidates() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = dirs::home_dir() {

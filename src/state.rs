@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! State shared between the UI thread and the worker thread.
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-
-const LOG_LINES: usize = 400;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Task {
@@ -14,6 +11,8 @@ pub enum Task {
     InstallingProton,
     CheckingUpdate,
     Launching,
+    SigningIn,
+    LoadingGames,
 }
 
 impl Task {
@@ -24,8 +23,17 @@ impl Task {
             Task::InstallingProton => "Downloading Proton",
             Task::CheckingUpdate => "Checking for updates",
             Task::Launching => "Starting Vortex",
+            Task::SigningIn => "Signing in",
+            Task::LoadingGames => "Loading games",
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct GameRow {
+    pub id: u64,
+    pub name: String,
+    pub players: u64,
 }
 
 #[derive(Default)]
@@ -34,27 +42,36 @@ pub struct Status {
     pub detail: String,
     pub progress: Option<f32>,
     pub error: Option<String>,
-    pub log: VecDeque<String>,
     pub game_ready: bool,
     pub proton_ready: bool,
     pub proton_name: Option<String>,
     pub game_running: bool,
     pub allow_self_update: bool,
     pub update_available: bool,
+    pub account: Option<String>,
+    pub needs_2fa: bool,
+    pub auth_error: Option<String>,
+    pub games: Vec<GameRow>,
+    pub selected_game: Option<u64>,
 }
 
 pub struct Shared {
     status: Mutex<Status>,
     cancel: AtomicBool,
     ctx: Mutex<Option<eframe::egui::Context>>,
+    log: Mutex<Option<std::fs::File>>,
 }
 
 impl Shared {
-    pub fn new() -> Arc<Self> {
+    pub fn new(log_path: &std::path::Path) -> Arc<Self> {
+        if let Some(parent) = log_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
         Arc::new(Self {
             status: Mutex::new(Status::default()),
             cancel: AtomicBool::new(false),
             ctx: Mutex::new(None),
+            log: Mutex::new(std::fs::File::create(log_path).ok()),
         })
     }
 
@@ -77,14 +94,14 @@ impl Shared {
     }
 
     pub fn log(&self, line: impl Into<String>) {
-        let line = line.into();
-        if let Ok(mut status) = self.status.lock() {
-            if status.log.len() >= LOG_LINES {
-                status.log.pop_front();
+        use std::io::Write;
+
+        if let Ok(mut file) = self.log.lock() {
+            if let Some(file) = file.as_mut() {
+                writeln!(file, "{}", line.into()).ok();
+                file.flush().ok();
             }
-            status.log.push_back(line);
         }
-        self.repaint();
     }
 
     pub fn begin(&self, task: Task) {

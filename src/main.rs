@@ -2,12 +2,14 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod auth;
 mod config;
 mod game;
 mod launch;
 mod net;
 mod paths;
 mod proton;
+mod session;
 mod state;
 mod worker;
 
@@ -20,8 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Vortex Launcher")
             .with_app_id("vortex-launcher")
-            .with_inner_size([460.0, 420.0])
-            .with_min_inner_size([420.0, 380.0]),
+            .with_inner_size([460.0, 560.0])
+            .with_min_inner_size([420.0, 460.0]),
         ..Default::default()
     };
 

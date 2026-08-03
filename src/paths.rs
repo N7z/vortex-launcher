@@ -24,12 +24,10 @@ impl Paths {
         Ok(Self { data, config })
     }
 
-    /// holds Vortex.exe
     pub fn game(&self) -> PathBuf {
         self.data.join("game")
     }
 
-    /// one directory per proton build
     pub fn proton(&self) -> PathBuf {
         self.data.join("proton")
     }
@@ -44,7 +42,6 @@ impl Paths {
         self.data.join("compat-client")
     }
 
-    /// partials live here so they can resume across runs
     pub fn downloads(&self) -> PathBuf {
         self.data.join("downloads")
     }
@@ -55,6 +52,11 @@ impl Paths {
 
     pub fn config_file(&self) -> PathBuf {
         self.config.join("config.json")
+    }
+
+    /// the session token, kept apart from the config so it can be 0600 and wiped alone
+    pub fn session_file(&self) -> PathBuf {
+        self.data.join("session.json")
     }
 
     pub fn ensure(&self) -> Result<()> {

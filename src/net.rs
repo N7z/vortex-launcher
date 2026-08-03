@@ -32,6 +32,8 @@ pub fn agent() -> ureq::Agent {
         .user_agent(USER_AGENT)
         // connect only, a 400 MB download must not race a global timer
         .timeout_connect(Some(Duration::from_secs(20)))
+        // every caller checks the status itself and says something useful about it
+        .http_status_as_error(false)
         .build();
     ureq::Agent::new_with_config(config)
 }

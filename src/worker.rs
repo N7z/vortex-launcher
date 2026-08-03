@@ -4,12 +4,13 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use crate::config::Config;
 use crate::paths::Paths;
-use crate::state::{Shared, Task};
-use crate::{game, launch, net, proton};
+use crate::session::Session;
+use crate::state::{GameRow, Shared, Task};
+use crate::{auth, game, launch, net, proton, session};
 
 pub enum Job {
     Detect,
@@ -17,6 +18,11 @@ pub enum Job {
     CheckUpdate,
     Play,
     SetSelfUpdate(bool),
+    SignIn { username: String, password: String },
+    Submit2fa(String),
+    SignOut,
+    LoadGames,
+    SelectGame(u64),
 }
 
 pub struct Worker {
@@ -36,30 +42,60 @@ impl Worker {
     }
 }
 
+struct Ctx {
+    shared: Arc<Shared>,
+    paths: Paths,
+    config: Config,
+    session: Option<Session>,
+    pending_2fa: Option<String>,
+    /// what the user typed, kept because the account lookup can fail after a good login
+    typed_username: String,
+    selected_game: Option<u64>,
+}
+
 fn run(shared: Arc<Shared>, paths: Paths, inbox: Receiver<Job>) {
     let agent = net::agent();
-    let mut config = Config::load(&paths.config_file());
+    let config = Config::load(&paths.config_file());
+    let session = session::load(&paths.session_file());
+    let mut ctx = Ctx {
+        shared,
+        paths,
+        config,
+        session,
+        pending_2fa: None,
+        typed_username: String::new(),
+        selected_game: None,
+    };
 
     while let Ok(job) = inbox.recv() {
         let result = match job {
-            Job::Detect => detect(&shared, &paths, &mut config),
-            Job::Setup => setup(&agent, &shared, &paths, &mut config),
-            Job::CheckUpdate => check_update(&agent, &shared, &paths, &mut config),
-            Job::Play => play(&shared, &paths, &config),
+            Job::Detect => detect(&mut ctx),
+            Job::Setup => setup(&agent, &mut ctx),
+            Job::CheckUpdate => check_update(&agent, &mut ctx),
+            Job::Play => play(&mut ctx),
             Job::SetSelfUpdate(value) => {
-                config.allow_self_update = value;
-                publish(&shared, &config);
-                config.save(&paths.config_file())
+                ctx.config.allow_self_update = value;
+                publish(&ctx);
+                ctx.config.save(&ctx.paths.config_file())
+            }
+            Job::SignIn { username, password } => sign_in(&mut ctx, &username, &password),
+            Job::Submit2fa(code) => submit_2fa(&mut ctx, &code),
+            Job::SignOut => sign_out(&mut ctx),
+            Job::LoadGames => load_games(&ctx),
+            Job::SelectGame(id) => {
+                ctx.selected_game = Some(id);
+                ctx.shared.update(|status| status.selected_game = Some(id));
+                Ok(())
             }
         };
 
         match result {
-            Ok(()) => shared.finish(),
+            Ok(()) => ctx.shared.finish(),
             Err(err) if net::is_cancelled(&err) => {
-                shared.log("cancelled");
-                shared.finish();
+                ctx.shared.log("cancelled");
+                ctx.shared.finish();
             }
-            Err(err) => shared.fail(describe(&err)),
+            Err(err) => ctx.shared.fail(describe(&err)),
         }
     }
 }
@@ -75,70 +111,106 @@ fn describe(err: &anyhow::Error) -> String {
     text
 }
 
-fn publish(shared: &Arc<Shared>, config: &Config) {
-    let game_ready = config.game_ready();
-    let proton_ready = config.proton_ready();
-    let proton_name = config.proton.as_ref().map(|p| p.name.clone());
-    let allow_self_update = config.allow_self_update;
-    shared.update(|status| {
+fn expired(err: &anyhow::Error) -> bool {
+    err.chain()
+        .any(|cause| cause.to_string().starts_with("session expired"))
+}
+
+fn publish(ctx: &Ctx) {
+    let game_ready = ctx.config.game_ready();
+    let proton_ready = ctx.config.proton_ready();
+    let proton_name = ctx.config.proton.as_ref().map(|p| p.name.clone());
+    let allow_self_update = ctx.config.allow_self_update;
+    let account = ctx.session.as_ref().map(|s| s.username.clone());
+    ctx.shared.update(|status| {
         status.game_ready = game_ready;
         status.proton_ready = proton_ready;
         status.proton_name = proton_name;
         status.allow_self_update = allow_self_update;
+        status.account = account;
     });
 }
 
-fn detect(shared: &Arc<Shared>, paths: &Paths, config: &mut Config) -> Result<()> {
-    shared.begin(Task::Detecting);
-    paths.ensure()?;
+fn detect(ctx: &mut Ctx) -> Result<()> {
+    ctx.shared.begin(Task::Detecting);
+    ctx.paths.ensure()?;
 
-    if !config.game_ready() {
-        config.game = None;
+    if !ctx.config.game_ready() {
+        ctx.config.game = None;
     }
-    if !config.proton_ready() {
-        config.proton = proton::detect_managed(paths).or_else(proton::detect_system);
-        if let Some(found) = &config.proton {
-            shared.log(format!("found {}", found.name));
+    if !ctx.config.proton_ready() {
+        ctx.config.proton = proton::detect_managed(&ctx.paths).or_else(proton::detect_system);
+        if let Some(found) = &ctx.config.proton {
+            ctx.shared.log(format!("found {}", found.name));
         }
     }
-    publish(shared, config);
-    config.save(&paths.config_file())
-}
+    publish(ctx);
+    ctx.config.save(&ctx.paths.config_file())?;
 
-fn setup(agent: &ureq::Agent, shared: &Arc<Shared>, paths: &Paths, config: &mut Config) -> Result<()> {
-    paths.ensure()?;
-
-    if !config.proton_ready() {
-        config.proton = proton::detect_managed(paths).or_else(proton::detect_system);
+    if let Some(stored) = ctx.session.clone() {
+        match auth::account(&stored.token) {
+            Ok(account) => {
+                ctx.shared.log(format!("signed in as {}", account.username));
+                ctx.session = Some(Session {
+                    token: stored.token,
+                    username: account.username,
+                    user_id: account.id,
+                });
+                publish(ctx);
+                return load_games(ctx);
+            }
+            // neither a 401 here nor being offline is proof the token is dead.
+            // the play page decides, and it clears the session when it refuses.
+            Err(err) => {
+                ctx.shared
+                    .log(format!("account check failed: {}", describe(&err)));
+                publish(ctx);
+                return load_games(ctx);
+            }
+        }
     }
-    if !config.proton_ready() {
-        shared.begin(Task::InstallingProton);
-        config.proton = Some(proton::install(agent, paths, shared, shared.cancel_flag())?);
-        config.save(&paths.config_file())?;
-        publish(shared, config);
-    }
-
-    if !config.game_ready() {
-        shared.begin(Task::InstallingGame);
-        config.game = Some(game::install(agent, paths, shared, shared.cancel_flag())?);
-        config.save(&paths.config_file())?;
-    }
-
-    publish(shared, config);
-    shared.update(|status| status.update_available = false);
     Ok(())
 }
 
-fn check_update(
-    agent: &ureq::Agent,
-    shared: &Arc<Shared>,
-    paths: &Paths,
-    config: &mut Config,
-) -> Result<()> {
-    shared.begin(Task::CheckingUpdate);
+fn setup(agent: &ureq::Agent, ctx: &mut Ctx) -> Result<()> {
+    ctx.paths.ensure()?;
 
-    let Some(installed) = config.game.clone() else {
-        return setup(agent, shared, paths, config);
+    if !ctx.config.proton_ready() {
+        ctx.config.proton = proton::detect_managed(&ctx.paths).or_else(proton::detect_system);
+    }
+    if !ctx.config.proton_ready() {
+        ctx.shared.begin(Task::InstallingProton);
+        ctx.config.proton = Some(proton::install(
+            agent,
+            &ctx.paths,
+            &ctx.shared,
+            ctx.shared.cancel_flag(),
+        )?);
+        ctx.config.save(&ctx.paths.config_file())?;
+        publish(ctx);
+    }
+
+    if !ctx.config.game_ready() {
+        ctx.shared.begin(Task::InstallingGame);
+        ctx.config.game = Some(game::install(
+            agent,
+            &ctx.paths,
+            &ctx.shared,
+            ctx.shared.cancel_flag(),
+        )?);
+        ctx.config.save(&ctx.paths.config_file())?;
+    }
+
+    publish(ctx);
+    ctx.shared.update(|status| status.update_available = false);
+    Ok(())
+}
+
+fn check_update(agent: &ureq::Agent, ctx: &mut Ctx) -> Result<()> {
+    ctx.shared.begin(Task::CheckingUpdate);
+
+    let Some(installed) = ctx.config.game.clone() else {
+        return setup(agent, ctx);
     };
 
     let remote = game::probe(agent)?;
@@ -148,21 +220,158 @@ fn check_update(
         installed.size,
     );
     if !changed {
-        shared.log("vortex is up to date");
-        shared.update(|status| status.update_available = false);
+        ctx.shared.log("vortex is up to date");
+        ctx.shared.update(|status| status.update_available = false);
         return Ok(());
     }
 
-    shared.log("new vortex build, downloading");
-    shared.begin(Task::InstallingGame);
-    config.game = Some(game::install(agent, paths, shared, shared.cancel_flag())?);
-    config.save(&paths.config_file())?;
-    publish(shared, config);
-    shared.update(|status| status.update_available = false);
+    ctx.shared.log("new vortex build, downloading");
+    ctx.shared.begin(Task::InstallingGame);
+    ctx.config.game = Some(game::install(
+        agent,
+        &ctx.paths,
+        &ctx.shared,
+        ctx.shared.cancel_flag(),
+    )?);
+    ctx.config.save(&ctx.paths.config_file())?;
+    publish(ctx);
+    ctx.shared.update(|status| status.update_available = false);
     Ok(())
 }
 
-fn play(shared: &Arc<Shared>, paths: &Paths, config: &Config) -> Result<()> {
-    shared.begin(Task::Launching);
-    launch::launch(paths, config, shared)
+fn sign_in(ctx: &mut Ctx, username: &str, password: &str) -> Result<()> {
+    ctx.shared.begin(Task::SigningIn);
+    ctx.shared.update(|status| status.auth_error = None);
+    ctx.typed_username = username.to_owned();
+
+    match auth::login(username, password) {
+        Ok(auth::Login::Done(token)) => finish_sign_in(ctx, token),
+        Ok(auth::Login::Needs2fa(pending)) => {
+            ctx.pending_2fa = Some(pending);
+            ctx.shared.update(|status| status.needs_2fa = true);
+            Ok(())
+        }
+        Err(err) => auth_failed(ctx, &err),
+    }
+}
+
+fn submit_2fa(ctx: &mut Ctx, code: &str) -> Result<()> {
+    ctx.shared.begin(Task::SigningIn);
+    let Some(pending) = ctx.pending_2fa.clone() else {
+        bail!("the two-factor step expired, sign in again");
+    };
+
+    match auth::login_2fa(&pending, code) {
+        Ok(auth::Login::Done(token)) => {
+            ctx.pending_2fa = None;
+            ctx.shared.update(|status| status.needs_2fa = false);
+            finish_sign_in(ctx, token)
+        }
+        Ok(auth::Login::Needs2fa(_)) => {
+            ctx.shared
+                .update(|status| status.auth_error = Some("that code was not accepted".into()));
+            Ok(())
+        }
+        Err(err) => auth_failed(ctx, &err),
+    }
+}
+
+/// a rejected login is the server talking to the user, not a launcher failure
+fn auth_failed(ctx: &Ctx, err: &anyhow::Error) -> Result<()> {
+    let message = describe(err);
+    ctx.shared.log(format!("sign in refused: {message}"));
+    ctx.shared.update(|status| status.auth_error = Some(message));
+    Ok(())
+}
+
+fn finish_sign_in(ctx: &mut Ctx, token: String) -> Result<()> {
+    // the login already succeeded, so a failing account lookup must not undo it
+    let (username, user_id) = match auth::account(&token) {
+        Ok(account) => (account.username, account.id),
+        Err(err) => {
+            ctx.shared
+                .log(format!("account lookup failed: {}", describe(&err)));
+            (ctx.typed_username.clone(), 0)
+        }
+    };
+
+    let session = Session {
+        token,
+        username: username.clone(),
+        user_id,
+    };
+    session::save(&ctx.paths.session_file(), &session)?;
+    ctx.session = Some(session);
+    ctx.shared.update(|status| {
+        status.auth_error = None;
+        status.needs_2fa = false;
+    });
+    ctx.shared.log(format!("signed in as {username}"));
+    publish(ctx);
+    load_games(ctx)
+}
+
+fn sign_out(ctx: &mut Ctx) -> Result<()> {
+    session::clear(&ctx.paths.session_file());
+    ctx.session = None;
+    ctx.pending_2fa = None;
+    ctx.selected_game = None;
+    ctx.shared.update(|status| {
+        status.account = None;
+        status.needs_2fa = false;
+        status.auth_error = None;
+        status.games.clear();
+        status.selected_game = None;
+    });
+    ctx.shared.log("signed out");
+    Ok(())
+}
+
+fn load_games(ctx: &Ctx) -> Result<()> {
+    ctx.shared.begin(Task::LoadingGames);
+    let games = auth::games()?;
+    let mut rows: Vec<GameRow> = games
+        .into_iter()
+        .map(|g| GameRow {
+            id: g.id,
+            name: g.name,
+            players: g.players,
+        })
+        .collect();
+    rows.sort_by(|a, b| b.players.cmp(&a.players).then_with(|| a.name.cmp(&b.name)));
+    ctx.shared.update(|status| {
+        if status.selected_game.is_none() {
+            status.selected_game = rows.first().map(|row| row.id);
+        }
+        status.games = rows;
+    });
+    Ok(())
+}
+
+fn play(ctx: &mut Ctx) -> Result<()> {
+    ctx.shared.begin(Task::Launching);
+
+    let Some(session) = ctx.session.clone() else {
+        bail!("sign in first");
+    };
+    let game_id = ctx
+        .selected_game
+        .or_else(|| ctx.shared.read(|status| status.selected_game).flatten())
+        .unwrap_or(1);
+
+    ctx.shared
+        .update(|status| status.detail = "asking the server for a launch link".into());
+
+    let uri = match auth::play_uri(&session.token, game_id, None) {
+        Ok(uri) => uri,
+        Err(err) if expired(&err) => {
+            session::clear(&ctx.paths.session_file());
+            ctx.session = None;
+            publish(ctx);
+            bail!("your session expired, sign in again");
+        }
+        Err(err) => return Err(err),
+    };
+
+    launch::launch(&ctx.paths, &ctx.config, &ctx.shared, Some(&uri))
 }

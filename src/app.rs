@@ -6,19 +6,21 @@ use std::sync::Arc;
 use eframe::egui::{self, Color32, RichText};
 
 use crate::paths::Paths;
-use crate::state::Shared;
+use crate::state::{GameRow, Shared};
 use crate::worker::{Job, Worker};
 
 pub struct App {
     shared: Arc<Shared>,
     worker: Worker,
-    show_log: bool,
+    username: String,
+    password: String,
+    code: String,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, paths: Paths) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
-        let shared = Shared::new();
+        let shared = Shared::new(&paths.logs().join("launcher.log"));
         shared.attach(cc.egui_ctx.clone());
 
         let worker = Worker::spawn(Arc::clone(&shared), paths);
@@ -27,7 +29,9 @@ impl App {
         Self {
             shared,
             worker,
-            show_log: false,
+            username: String::new(),
+            password: String::new(),
+            code: String::new(),
         }
     }
 }
@@ -51,7 +55,7 @@ impl eframe::App for App {
             ui.add_space(16.0);
 
             if let Some(error) = &snapshot.error {
-                error_banner(ui, error);
+                error_banner(ui, error, Color32::from_rgb(60, 26, 26), Color32::from_rgb(255, 180, 180));
                 ui.add_space(10.0);
             }
 
@@ -81,7 +85,6 @@ impl eframe::App for App {
             self.footer(ui, &snapshot);
         });
 
-        // the log pane needs a steady repaint while output is streaming in
         if snapshot.game_running || snapshot.task.is_some() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
@@ -90,32 +93,117 @@ impl eframe::App for App {
 
 impl App {
     fn idle_controls(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) {
-        let ready = snapshot.game_ready && snapshot.proton_ready;
+        if !snapshot.game_ready || !snapshot.proton_ready {
+            self.install_screen(ui);
+            return;
+        }
+        if snapshot.account.is_none() {
+            self.sign_in_screen(ui, snapshot);
+            return;
+        }
+        self.play_screen(ui, snapshot);
+    }
 
+    fn install_screen(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            if big_button(ui, "Install").clicked() {
+                self.worker.send(Job::Setup);
+            }
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("first run downloads Vortex and Proton, about 500 MB")
+                    .size(11.0)
+                    .color(Color32::from_gray(140)),
+            );
+        });
+    }
+
+    fn sign_in_screen(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) {
+        if let Some(error) = &snapshot.auth_error {
+            error_banner(ui, error, Color32::from_rgb(58, 40, 20), Color32::from_rgb(255, 214, 170));
+            ui.add_space(8.0);
+        }
+
+        if snapshot.needs_2fa {
+            ui.label(RichText::new("Two-factor code").strong());
+            ui.add_space(4.0);
+            let entered = ui
+                .add(egui::TextEdit::singleline(&mut self.code).desired_width(f32::INFINITY))
+                .lost_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.add_space(10.0);
+            if (ui.button("Verify").clicked() || entered) && !self.code.trim().is_empty() {
+                self.worker.send(Job::Submit2fa(self.code.trim().to_owned()));
+                self.code.clear();
+            }
+            return;
+        }
+
+        ui.label(RichText::new("Sign in to play").strong());
+        ui.add_space(8.0);
+        ui.label(RichText::new("Username").size(11.0).color(Color32::from_gray(150)));
+        ui.add(egui::TextEdit::singleline(&mut self.username).desired_width(f32::INFINITY));
+        ui.add_space(6.0);
+        ui.label(RichText::new("Password").size(11.0).color(Color32::from_gray(150)));
+        let submitted = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.password)
+                    .password(true)
+                    .desired_width(f32::INFINITY),
+            )
+            .lost_focus()
+            && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+        ui.add_space(12.0);
+        let ready = !self.username.trim().is_empty() && !self.password.is_empty();
+        let clicked = ui
+            .add_enabled(ready, egui::Button::new("Sign in").min_size([120.0, 30.0].into()))
+            .clicked();
+        if ready && (clicked || submitted) {
+            self.worker.send(Job::SignIn {
+                username: self.username.trim().to_owned(),
+                password: std::mem::take(&mut self.password),
+            });
+        }
+    }
+
+    fn play_screen(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) {
         ui.vertical_centered(|ui| {
             if snapshot.game_running {
-                ui.add_enabled(
-                    false,
-                    egui::Button::new(RichText::new("Running").size(20.0)).min_size([230.0, 46.0].into()),
-                );
+                ui.add_enabled(false, egui::Button::new(RichText::new("Running").size(20.0)).min_size([230.0, 46.0].into()));
                 ui.add_space(6.0);
                 ui.label(RichText::new("Vortex is open").color(Color32::from_gray(150)));
-                return;
-            }
-
-            let label = if ready { "Play" } else { "Install" };
-            if ui
-                .add(egui::Button::new(RichText::new(label).size(20.0)).min_size([230.0, 46.0].into()))
-                .clicked()
-            {
-                self.worker.send(if ready { Job::Play } else { Job::Setup });
-            }
-
-            ui.add_space(10.0);
-            if ready && ui.button("Check for updates").clicked() {
-                self.worker.send(Job::CheckUpdate);
+            } else if big_button(ui, "Play").clicked() {
+                self.worker.send(Job::Play);
             }
         });
+
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Games").size(11.0).color(Color32::from_gray(150)));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Refresh").clicked() {
+                    self.worker.send(Job::LoadGames);
+                }
+            });
+        });
+        ui.add_space(4.0);
+
+        egui::ScrollArea::vertical()
+            .max_height(150.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                if snapshot.games.is_empty() {
+                    ui.label(RichText::new("no games listed").color(Color32::from_gray(120)));
+                }
+                for game in &snapshot.games {
+                    let selected = snapshot.selected_game == Some(game.id);
+                    let label = format!("{} - {} playing", game.name, game.players);
+                    if ui.selectable_label(selected, label).clicked() {
+                        self.worker.send(Job::SelectGame(game.id));
+                    }
+                }
+            });
     }
 
     fn footer(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) {
@@ -126,9 +214,11 @@ impl App {
                     .color(Color32::from_gray(140)),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let toggle = if self.show_log { "Hide details" } else { "Details" };
-                if ui.small_button(toggle).clicked() {
-                    self.show_log = !self.show_log;
+                if snapshot.account.is_some() && ui.small_button("Sign out").clicked() {
+                    self.worker.send(Job::SignOut);
+                }
+                if snapshot.game_ready && ui.small_button("Check for updates").clicked() {
+                    self.worker.send(Job::CheckUpdate);
                 }
             });
         });
@@ -140,38 +230,30 @@ impl App {
         {
             self.worker.send(Job::SetSelfUpdate(self_update));
         }
-
-        if self.show_log {
-            ui.add_space(6.0);
-            egui::ScrollArea::vertical()
-                .max_height(160.0)
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    for line in &snapshot.log {
-                        ui.label(RichText::new(line).monospace().size(11.0));
-                    }
-                });
-        }
     }
 }
 
-fn error_banner(ui: &mut egui::Ui, error: &str) {
+fn big_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    ui.add(egui::Button::new(RichText::new(label).size(20.0)).min_size([230.0, 46.0].into()))
+}
+
+fn error_banner(ui: &mut egui::Ui, text: &str, fill: Color32, ink: Color32) {
     egui::Frame::new()
-        .fill(Color32::from_rgb(60, 26, 26))
+        .fill(fill)
         .inner_margin(10.0)
         .corner_radius(6.0)
         .show(ui, |ui| {
-            ui.label(RichText::new(error).color(Color32::from_rgb(255, 180, 180)));
+            ui.label(RichText::new(text).color(ink));
         });
 }
 
 fn status_line(snapshot: &Snapshot) -> String {
-    let game = if snapshot.game_ready { "Vortex ok" } else { "Vortex missing" };
+    let who = snapshot.account.clone().unwrap_or_else(|| "signed out".into());
     let proton = match (&snapshot.proton_name, snapshot.proton_ready) {
         (Some(name), true) => name.clone(),
         _ => "Proton missing".into(),
     };
-    format!("{game} · {proton}")
+    format!("{who} - {proton}")
 }
 
 /// copy of the shared status, so the lock is never held while drawing
@@ -180,12 +262,16 @@ struct Snapshot {
     detail: String,
     progress: Option<f32>,
     error: Option<String>,
-    log: Vec<String>,
     game_ready: bool,
     proton_ready: bool,
     proton_name: Option<String>,
     game_running: bool,
     allow_self_update: bool,
+    account: Option<String>,
+    needs_2fa: bool,
+    auth_error: Option<String>,
+    games: Vec<GameRow>,
+    selected_game: Option<u64>,
 }
 
 impl Snapshot {
@@ -195,12 +281,16 @@ impl Snapshot {
             detail: status.detail.clone(),
             progress: status.progress,
             error: status.error.clone(),
-            log: status.log.iter().cloned().collect(),
             game_ready: status.game_ready,
             proton_ready: status.proton_ready,
             proton_name: status.proton_name.clone(),
             game_running: status.game_running,
             allow_self_update: status.allow_self_update,
+            account: status.account.clone(),
+            needs_2fa: status.needs_2fa,
+            auth_error: status.auth_error.clone(),
+            games: status.games.clone(),
+            selected_game: status.selected_game,
         }
     }
 }

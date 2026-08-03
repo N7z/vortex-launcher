@@ -24,7 +24,12 @@ fn python() -> Result<PathBuf> {
     bail!("python3 was not found, install it with your package manager (Proton needs it)")
 }
 
-pub fn launch(paths: &Paths, config: &Config, shared: &Arc<Shared>) -> Result<()> {
+pub fn launch(
+    paths: &Paths,
+    config: &Config,
+    shared: &Arc<Shared>,
+    uri: Option<&str>,
+) -> Result<()> {
     let game = config.game.as_ref().context("Vortex is not installed yet")?;
     let proton = config.proton.as_ref().context("Proton is not installed yet")?;
 
@@ -48,7 +53,14 @@ pub fn launch(paths: &Paths, config: &Config, shared: &Arc<Shared>) -> Result<()
         .arg(&script)
         .arg("run")
         .arg(&game.exe)
-        .current_dir(&working_dir)
+        .current_dir(&working_dir);
+    if let Some(uri) = uri {
+        if !crate::auth::is_launch_uri(uri) {
+            bail!("that is not a vortex:// launch link");
+        }
+        command.arg(uri);
+    }
+    command
         .env("STEAM_COMPAT_DATA_PATH", paths.prefix())
         .env("STEAM_COMPAT_CLIENT_INSTALL_PATH", paths.compat_client())
         .stdin(Stdio::null())
@@ -62,16 +74,16 @@ pub fn launch(paths: &Paths, config: &Config, shared: &Arc<Shared>) -> Result<()
         .spawn()
         .with_context(|| format!("cannot start Proton ({})", script.display()))?;
 
-    shared.log(format!("running {} via {}", game.exe.display(), proton.name));
+    shared.log(format!("running vortex via {}", proton.name));
     shared.update(|status| status.game_running = true);
 
     let log = Arc::new(std::sync::Mutex::new(log));
     let mut pipes = Vec::new();
     if let Some(out) = child.stdout.take() {
-        pipes.push(pipe(out, Arc::clone(shared), Arc::clone(&log)));
+        pipes.push(pipe(out, Arc::clone(&log)));
     }
     if let Some(err) = child.stderr.take() {
-        pipes.push(pipe(err, Arc::clone(shared), Arc::clone(&log)));
+        pipes.push(pipe(err, Arc::clone(&log)));
     }
 
     let shared = Arc::clone(shared);
@@ -106,15 +118,15 @@ pub fn launch(paths: &Paths, config: &Config, shared: &Arc<Shared>) -> Result<()
 
 fn pipe<R: std::io::Read + Send + 'static>(
     reader: R,
-    shared: Arc<Shared>,
     log: Arc<std::sync::Mutex<std::fs::File>>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         for line in BufReader::new(reader).lines().map_while(Result::ok) {
+            // the launch uri carries a credential and the client echoes its argv
+            let line = crate::session::redact(&line);
             if let Ok(mut file) = log.lock() {
                 writeln!(file, "{line}").ok();
             }
-            shared.log(line);
         }
     })
 }

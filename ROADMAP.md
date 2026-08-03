@@ -5,25 +5,22 @@ below is out of scope until that is solid.
 
 ## Next
 
-- umu-launcher support, so Proton runs inside the Steam Linux Runtime container the
-  way Valve intends, instead of straight on the host
-- pick and pin a Proton build from the UI, keep more than one installed
-- prefix maintenance: reset prefix, open a winetricks-free repair path
+- join a specific server, not just a game (`/games/{id}/play?instance=`, the ids are
+  already in `/api/games`)
+- register `vortex://` as a system handler so links from the site reach the launcher
+- game thumbnails and friends, both behind the session
 - packaging: AppImage first, then AUR and Flatpak
-- launcher self-update
 - gamemode / MangoHud toggles
 - desktop entry and icon installed on first run
 
 ## Later
 
-- account login in the launcher (the client already handles its own auth)
 - multiple game instances
-- mod integration, hooking up the tooling from VortexStuff
+- mod integration
 - theming
 
-## Known gaps in the MVP
+## Known gaps in the project
 
-- Proton runs on the host, not in the sniper container. Works in practice, but a
-  distro with unusual library versions can still trip it.
+- Proton runs on the host, not in the sniper container. Works in practice, but a distro with unusual library versions can still trip it.
 - No cancel for the extraction step, only for downloads.
 - Update checks only cover the game, not the installed Proton build.
