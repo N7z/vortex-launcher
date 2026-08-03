@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::paths::Paths;
 use crate::session::Session;
 use crate::state::{GameRow, Shared, Task};
-use crate::{auth, game, launch, net, proton, session};
+use crate::{auth, desktop, game, launch, net, proton, session};
 
 pub enum Job {
     Detect,
@@ -23,6 +23,7 @@ pub enum Job {
     SignOut,
     LoadGames,
     SelectGame(u64),
+    PlayUri(String),
 }
 
 pub struct Worker {
@@ -34,6 +35,10 @@ impl Worker {
         let (jobs, inbox) = mpsc::channel();
         std::thread::spawn(move || run(shared, paths, inbox));
         Self { jobs }
+    }
+
+    pub fn handle(&self) -> Sender<Job> {
+        self.jobs.clone()
     }
 
     pub fn send(&self, job: Job) {
@@ -51,6 +56,8 @@ struct Ctx {
     /// what the user typed, kept because the account lookup can fail after a good login
     typed_username: String,
     selected_game: Option<u64>,
+    /// a link that arrived before the game was installed
+    pending_uri: Option<String>,
 }
 
 fn run(shared: Arc<Shared>, paths: Paths, inbox: Receiver<Job>) {
@@ -65,6 +72,7 @@ fn run(shared: Arc<Shared>, paths: Paths, inbox: Receiver<Job>) {
         pending_2fa: None,
         typed_username: String::new(),
         selected_game: None,
+        pending_uri: None,
     };
 
     while let Ok(job) = inbox.recv() {
@@ -82,6 +90,7 @@ fn run(shared: Arc<Shared>, paths: Paths, inbox: Receiver<Job>) {
             Job::Submit2fa(code) => submit_2fa(&mut ctx, &code),
             Job::SignOut => sign_out(&mut ctx),
             Job::LoadGames => load_games(&ctx),
+            Job::PlayUri(uri) => play_uri(&mut ctx, uri),
             Job::SelectGame(id) => {
                 ctx.selected_game = Some(id);
                 ctx.shared.update(|status| status.selected_game = Some(id));
@@ -134,6 +143,12 @@ fn publish(ctx: &Ctx) {
 fn detect(ctx: &mut Ctx) -> Result<()> {
     ctx.shared.begin(Task::Detecting);
     ctx.paths.ensure()?;
+
+    match desktop::install() {
+        Ok(true) => ctx.shared.log("registered as the vortex:// handler"),
+        Ok(false) => {}
+        Err(err) => ctx.shared.log(format!("desktop entry failed: {}", describe(&err))),
+    }
 
     if !ctx.config.game_ready() {
         ctx.config.game = None;
@@ -203,6 +218,10 @@ fn setup(agent: &ureq::Agent, ctx: &mut Ctx) -> Result<()> {
 
     publish(ctx);
     ctx.shared.update(|status| status.update_available = false);
+
+    if let Some(uri) = ctx.pending_uri.take() {
+        return play_uri(ctx, uri);
+    }
     Ok(())
 }
 
@@ -373,5 +392,20 @@ fn play(ctx: &mut Ctx) -> Result<()> {
         Err(err) => return Err(err),
     };
 
+    launch::launch(&ctx.paths, &ctx.config, &ctx.shared, Some(&uri))
+}
+
+fn play_uri(ctx: &mut Ctx, uri: String) -> Result<()> {
+    if !auth::is_launch_uri(&uri) {
+        bail!("that link is not a vortex:// launch link");
+    }
+    if !ctx.config.game_ready() || !ctx.config.proton_ready() {
+        ctx.shared.log("link received, but nothing is installed yet");
+        ctx.pending_uri = Some(uri);
+        bail!("install Vortex first, then the link will open");
+    }
+
+    ctx.shared.begin(Task::Launching);
+    ctx.shared.log("opening a link from the browser");
     launch::launch(&ctx.paths, &ctx.config, &ctx.shared, Some(&uri))
 }

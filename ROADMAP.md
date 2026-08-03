@@ -7,11 +7,10 @@ below is out of scope until that is solid.
 
 - join a specific server, not just a game (`/games/{id}/play?instance=`, the ids are
   already in `/api/games`)
-- register `vortex://` as a system handler so links from the site reach the launcher
 - game thumbnails and friends, both behind the session
 - packaging: AppImage first, then AUR and Flatpak
 - gamemode / MangoHud toggles
-- desktop entry and icon installed on first run
+- an icon for the desktop entry
 
 ## Later
 

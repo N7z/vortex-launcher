@@ -2742,6 +2742,7 @@ dependencies = [
  "dirs",
  "eframe",
  "flate2",
+ "png",
  "serde",
  "serde_json",
  "sha2",

@@ -22,8 +22,6 @@ Measured on this machine (Arch, Wayland, Mesa): 9.0 MB stripped binary, window u
 - Vulkan drivers for your GPU, for DXVK/vkd3d inside Proton.
 - ~2.5 GB free disk for Proton plus the game.
 
-No Steam required.
-
 ## Build
 
 ```sh
@@ -40,6 +38,12 @@ cargo build --release
 
 An existing Steam or `compatibilitytools.d` Proton is picked up and reused instead of downloading, when one is present.
 
+## Links from the browser
+
+On start the launcher writes `~/.local/share/applications/vortex-launcher.desktop` and claims `x-scheme-handler/vortex`, so pressing Play on the website opens the game here. It is rewritten only when missing or out of date, e.g after the binary moves.
+
+Only one launcher runs at a time: a second start hands its link to the first over `$XDG_RUNTIME_DIR/vortex-launcher.sock` and exits. A link that arrives before anything is installed waits for the install instead of being dropped.
+
 ## Where things go
 
 ```
@@ -51,11 +55,9 @@ $XDG_DATA_HOME/vortex-launcher/
     downloads/      partial downloads, resumed on the next run
     session.json    your session token, mode 0600
     logs/game.log       last session's game output
-    logs/launcher.log   what the launcher itself did
+    logs/launcher.log   what the launcher itself did, rewritten each run
 $XDG_CONFIG_HOME/vortex-launcher/config.json
 ```
-
-Updates are detected with a one-byte ranged GET against the download URL, comparing `ETag`/`Last-Modified` (HEAD answers 404 there, so a ranged GET is the cheap probe).
 
 By default the game is allowed to update itself on start; the checkbox turns that off by setting `VORTEX_NO_UPDATE=1`.
 

@@ -9,8 +9,11 @@ use crate::paths::Paths;
 use crate::state::{GameRow, Shared};
 use crate::worker::{Job, Worker};
 
+const CREDIT: &str = "Developed by zPaulinBRz | Logo by KitKat";
+
 pub struct App {
     shared: Arc<Shared>,
+    logo: Option<egui::TextureHandle>,
     worker: Worker,
     username: String,
     password: String,
@@ -18,16 +21,37 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, paths: Paths) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        paths: Paths,
+        uri: Option<String>,
+        listener: std::os::unix::net::UnixListener,
+    ) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        let logo = crate::logo::decode().map(|image| {
+            let size = [image.width as usize, image.height as usize];
+            let texture = egui::ColorImage::from_rgba_unmultiplied(size, &image.rgba);
+            cc.egui_ctx.load_texture("logo", texture, egui::TextureOptions::LINEAR)
+        });
         let shared = Shared::new(&paths.logs().join("launcher.log"));
         shared.attach(cc.egui_ctx.clone());
 
         let worker = Worker::spawn(Arc::clone(&shared), paths);
         worker.send(Job::Detect);
+        if let Some(uri) = uri {
+            worker.send(Job::PlayUri(uri));
+        }
+
+        let jobs = worker.handle();
+        let ctx = cc.egui_ctx.clone();
+        crate::ipc::serve(listener, move |message| {
+            jobs.send(Job::PlayUri(message)).ok();
+            ctx.request_repaint();
+        });
 
         Self {
             shared,
+            logo,
             worker,
             username: String::new(),
             password: String::new(),
@@ -43,16 +67,20 @@ impl eframe::App for App {
         };
 
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.add_space(14.0);
+            ui.add_space(12.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("VORTEX").size(30.0).strong());
+                if let Some(logo) = &self.logo {
+                    ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(84.0, 84.0)));
+                    ui.add_space(2.0);
+                }
+                ui.label(RichText::new("VORTEX").size(24.0).strong());
                 ui.label(
                     RichText::new("unofficial linux launcher")
                         .size(11.0)
                         .color(Color32::from_gray(130)),
                 );
             });
-            ui.add_space(16.0);
+            ui.add_space(14.0);
 
             if let Some(error) = &snapshot.error {
                 error_banner(ui, error, Color32::from_rgb(60, 26, 26), Color32::from_rgb(255, 180, 180));
@@ -230,6 +258,11 @@ impl App {
         {
             self.worker.send(Job::SetSelfUpdate(self_update));
         }
+
+        ui.add_space(8.0);
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new(CREDIT).size(10.0).color(Color32::from_gray(95)));
+        });
     }
 }
 
@@ -243,7 +276,9 @@ fn error_banner(ui: &mut egui::Ui, text: &str, fill: Color32, ink: Color32) {
         .inner_margin(10.0)
         .corner_radius(6.0)
         .show(ui, |ui| {
-            ui.label(RichText::new(text).color(ink));
+            ui.vertical_centered(|ui| {
+                ui.add(egui::Label::new(RichText::new(text).color(ink)).halign(egui::Align::Center));
+            });
         });
 }
 
