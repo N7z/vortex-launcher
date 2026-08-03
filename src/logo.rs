@@ -3,6 +3,10 @@
 
 const BYTES: &[u8] = include_bytes!("../assets/logo.png");
 
+pub fn png_bytes() -> &'static [u8] {
+    BYTES
+}
+
 pub struct Image {
     pub rgba: Vec<u8>,
     pub width: u32,

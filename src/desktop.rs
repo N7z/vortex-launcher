@@ -6,9 +6,30 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 const FILE: &str = "vortex-launcher.desktop";
+const ICON: &str = "vortex-launcher";
 
 fn applications_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|dir| dir.join("applications"))
+}
+
+/// the icon has to live in the hicolor theme for Icon= to resolve by name
+fn install_icon() -> Result<()> {
+    let dir = dirs::data_dir()
+        .context("no XDG data directory")?
+        .join("icons/hicolor/256x256/apps");
+    let path = dir.join(format!("{ICON}.png"));
+    let wanted = crate::logo::png_bytes();
+
+    if std::fs::read(&path).is_ok_and(|found| found == wanted) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    std::fs::write(&path, wanted).with_context(|| format!("cannot write {}", path.display()))?;
+
+    if let Some(theme) = dir.parent().and_then(|d| d.parent()) {
+        run("gtk-update-icon-cache", &["-t", "-q", theme.to_string_lossy().as_ref()]);
+    }
+    Ok(())
 }
 
 fn entry(exe: &str) -> String {
@@ -18,6 +39,7 @@ fn entry(exe: &str) -> String {
          Name=Vortex Launcher\n\
          Comment=Unofficial Linux launcher for Vortex\n\
          Exec={exe} %u\n\
+         Icon={ICON}\n\
          Terminal=false\n\
          Categories=Game;\n\
          Keywords=vortex;\n\
@@ -35,6 +57,7 @@ pub fn install() -> Result<bool> {
         .to_string();
     let wanted = entry(&exe);
     let path = dir.join(FILE);
+    install_icon()?;
 
     if std::fs::read_to_string(&path).is_ok_and(|found| found == wanted) {
         return Ok(false);
