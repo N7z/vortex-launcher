@@ -72,6 +72,8 @@ $XDG_CONFIG_HOME/vortex-launcher/config.json
 
 By default the game is allowed to update itself on start; the checkbox turns that off by setting `VORTEX_NO_UPDATE=1`.
 
+Special thanks to KitKat for the Logo!
+
 ## License
 
 AGPL-3.0-or-later, see [LICENSE](LICENSE).
