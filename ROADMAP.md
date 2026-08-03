@@ -10,7 +10,6 @@ below is out of scope until that is solid.
 - game thumbnails and friends, both behind the session
 - packaging: AppImage first, then AUR and Flatpak
 - gamemode / MangoHud toggles
-- an icon for the desktop entry
 
 ## Later
 
