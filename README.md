@@ -13,7 +13,7 @@ Not affiliated with or endorsed by the Vortex developers. No game files are redi
 | memory idle | ~65 MiB PSS | webview-class | n/a |
 | first run | click Install, done | | edit configs by hand |
 
-Measured on this machine (Arch, Wayland, Mesa): 9.0 MB stripped binary, window up in ~40 ms, 65 MiB PSS idle (149 MiB RSS, most of it shared Mesa pages).
+Measured on my machine (Arch, Wayland, Mesa): 9.0 MB stripped binary, window up in ~40 ms, 65 MiB PSS idle (149 MiB RSS, most of it shared Mesa pages).
 
 ## Requirements
 
