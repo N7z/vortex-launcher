@@ -1,4 +1,15 @@
+<div align="center">
+
 # vortex-launcher
+
+<img
+  width="128"
+  height="128"
+  alt="icon128"
+  src="https://github.com/user-attachments/assets/da4038ea-3b8c-49f5-8c5b-ae6a3b2db7f1"
+/>
+
+</div>
 
 Unofficial Linux launcher for [Vortex](https://playvortex.io). Native GUI, no webview, no terminal. It downloads the Windows build and Proton for you on first run and starts the game under a private wine prefix.
 
