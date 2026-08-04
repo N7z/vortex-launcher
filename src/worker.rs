@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::paths::Paths;
 use crate::session::Session;
 use crate::state::{GameRow, Shared, Task};
-use crate::{auth, desktop, game, launch, net, proton, session};
+use crate::{auth, game, launch, net, proton, session};
 
 pub enum Job {
     Detect,
@@ -143,12 +143,6 @@ fn publish(ctx: &Ctx) {
 fn detect(ctx: &mut Ctx) -> Result<()> {
     ctx.shared.begin(Task::Detecting);
     ctx.paths.ensure()?;
-
-    match desktop::install() {
-        Ok(true) => ctx.shared.log("registered as the vortex:// handler"),
-        Ok(false) => {}
-        Err(err) => ctx.shared.log(format!("desktop entry failed: {}", describe(&err))),
-    }
 
     if !ctx.config.game_ready() {
         ctx.config.game = None;

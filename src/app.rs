@@ -26,6 +26,7 @@ impl App {
         paths: Paths,
         uri: Option<String>,
         listener: std::os::unix::net::UnixListener,
+        desktop_note: Option<String>,
     ) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let logo = crate::logo::decode().map(|image| {
@@ -35,6 +36,9 @@ impl App {
         });
         let shared = Shared::new(&paths.logs().join("launcher.log"));
         shared.attach(cc.egui_ctx.clone());
+        if let Some(note) = desktop_note {
+            shared.log(note);
+        }
 
         let worker = Worker::spawn(Arc::clone(&shared), paths);
         worker.send(Job::Detect);

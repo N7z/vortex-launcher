@@ -39,6 +39,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
 
+    // has to happen before the window exists: the desktop shell resolves our app id to a
+    // desktop entry the moment the window is mapped, and never looks again for that window
+    let desktop_note = match desktop::install() {
+        Ok(true) => Some("registered as the vortex:// handler".to_string()),
+        Ok(false) => None,
+        Err(err) => Some(format!("desktop entry failed: {err:#}")),
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Vortex Launcher")
@@ -52,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "Vortex Launcher",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, paths, uri, listener)))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, paths, uri, listener, desktop_note)))),
     )?;
     Ok(())
 }
