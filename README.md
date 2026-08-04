@@ -15,6 +15,10 @@ Unofficial Linux launcher for [Vortex](https://playvortex.io). Native GUI, no we
 
 Not affiliated with or endorsed by the Vortex developers. No game files are redistributed here; everything is fetched from the official download URL at runtime.
 
+<div align="center">
+<img width="575" height="709" alt="image" src="https://github.com/user-attachments/assets/bdae428e-b50a-4469-8072-3bb2d0617c0c" />
+</div>
+
 ## Why another one
 
 | | vortex-launcher | Riko | Tempest |
