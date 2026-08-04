@@ -658,7 +658,6 @@ dependencies = [
  "bytemuck",
  "ecolor",
  "emath",
- "epaint_default_fonts",
  "font-types",
  "harfrust",
  "log",
@@ -2736,11 +2735,12 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vortex-launcher"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "dirs",
  "eframe",
+ "epaint_default_fonts",
  "flate2",
  "png",
  "serde",

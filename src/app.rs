@@ -29,6 +29,7 @@ impl App {
         desktop_note: Option<String>,
     ) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        set_fonts(&cc.egui_ctx);
         let logo = crate::logo::decode().map(|image| {
             let size = [image.width as usize, image.height as usize];
             let texture = egui::ColorImage::from_rgba_unmultiplied(size, &image.rgba);
@@ -62,6 +63,20 @@ impl App {
             code: String::new(),
         }
     }
+}
+
+fn set_fonts(ctx: &egui::Context) {
+    use egui::{FontData, FontDefinitions, FontFamily};
+
+    let mut fonts = FontDefinitions::empty();
+    fonts.font_data.insert(
+        "ubuntu".to_owned(),
+        Arc::new(FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT)),
+    );
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().push("ubuntu".to_owned());
+    }
+    ctx.set_fonts(fonts);
 }
 
 impl eframe::App for App {

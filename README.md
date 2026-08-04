@@ -21,14 +21,18 @@ Not affiliated with or endorsed by the Vortex developers. No game files are redi
 
 ## Why another one
 
+The other two Linux launchers are [Riko](https://github.com/Arbuzyonak/Riko) (Tauri GUI) and [Tempest](https://github.com/solomon-gleeson/tempest) (the CLI Riko grew out of, archived).
+
 | | vortex-launcher | Riko | Tempest |
 |---|---|---|---|
-| UI | native (egui) | webview | none, CLI only |
-| binary | 9.0 MB | bundles a browser engine | small |
-| memory idle | ~65 MiB PSS | webview-class | n/a |
-| first run | click Install, done | | edit configs by hand |
+| UI | egui (native) | webview | CLI only |
+| binary | 7.9 MB | 12.7 MB | 5.5 MB |
+| RAM idle | ~55 MiB PSS | ~226 MiB PSS | none |
+| you must install | nothing | Wine, webkit2gtk | Wine (its installer does it) |
+| wine | downloads GE-Proton itself | system Wine | system Wine |
+| scope | launch games | library, plugins, overlays, friends, stats | setup, login, play, doctor |
 
-Measured on my machine (Arch, Wayland, Mesa): 9.0 MB stripped binary, window up in ~40 ms, 65 MiB PSS idle (149 MiB RSS, most of it shared Mesa pages).
+Measured on my machine (Arch, Wayland, Mesa): 7.9 MB stripped, window up in ~40 ms, 55 MiB PSS idle (123 MiB RSS, most of it shared Mesa pages).
 
 ## Requirements
 
