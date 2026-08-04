@@ -69,6 +69,12 @@ pub fn launch(
     if !config.allow_self_update {
         command.env("VORTEX_NO_UPDATE", "1");
     }
+    if config.native_shader_compiler {
+        // proton rebuilds WINEDLLOVERRIDES itself and merges PROTON_DLL_OVERRIDES
+        // into it, so set both and keep whatever the user already exported
+        command.env("PROTON_DLL_OVERRIDES", merge_overrides("PROTON_DLL_OVERRIDES"));
+        command.env("WINEDLLOVERRIDES", merge_overrides("WINEDLLOVERRIDES"));
+    }
 
     let mut child = command
         .spawn()
@@ -114,6 +120,16 @@ pub fn launch(
     });
 
     Ok(())
+}
+
+/// our override appended to whatever `name` already holds, ours last so it wins
+fn merge_overrides(name: &str) -> String {
+    match std::env::var(name) {
+        Ok(existing) if !existing.trim().is_empty() => {
+            format!("{existing};{}", crate::shaders::OVERRIDE)
+        }
+        _ => crate::shaders::OVERRIDE.to_owned(),
+    }
 }
 
 fn pipe<R: std::io::Read + Send + 'static>(

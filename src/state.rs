@@ -13,6 +13,7 @@ pub enum Task {
     Launching,
     SigningIn,
     LoadingGames,
+    InstallingCompiler,
 }
 
 impl Task {
@@ -25,6 +26,7 @@ impl Task {
             Task::Launching => "Starting Vortex",
             Task::SigningIn => "Signing in",
             Task::LoadingGames => "Loading games",
+            Task::InstallingCompiler => "Installing the shader compiler",
         }
     }
 }
@@ -47,6 +49,7 @@ pub struct Status {
     pub proton_name: Option<String>,
     pub game_running: bool,
     pub allow_self_update: bool,
+    pub native_shader_compiler: bool,
     pub update_available: bool,
     pub account: Option<String>,
     pub needs_2fa: bool,

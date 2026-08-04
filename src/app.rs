@@ -263,6 +263,19 @@ impl App {
             self.worker.send(Job::SetSelfUpdate(self_update));
         }
 
+        let mut native_compiler = snapshot.native_shader_compiler;
+        let toggled = ui
+            .checkbox(&mut native_compiler, "Use Microsoft's shader compiler")
+            .on_hover_text(
+                "Fixes a black screen with working audio on some GPUs, where Proton's own \
+                 shader compiler rejects the game's shaders. Downloads d3dcompiler_47 \
+                 through winetricks the first time.",
+            )
+            .changed();
+        if toggled {
+            self.worker.send(Job::SetNativeShaderCompiler(native_compiler));
+        }
+
         ui.add_space(8.0);
         ui.vertical_centered(|ui| {
             ui.label(RichText::new(CREDIT).size(10.0).color(Color32::from_gray(95)));
@@ -306,6 +319,7 @@ struct Snapshot {
     proton_name: Option<String>,
     game_running: bool,
     allow_self_update: bool,
+    native_shader_compiler: bool,
     account: Option<String>,
     needs_2fa: bool,
     auth_error: Option<String>,
@@ -325,6 +339,7 @@ impl Snapshot {
             proton_name: status.proton_name.clone(),
             game_running: status.game_running,
             allow_self_update: status.allow_self_update,
+            native_shader_compiler: status.native_shader_compiler,
             account: status.account.clone(),
             needs_2fa: status.needs_2fa,
             auth_error: status.auth_error.clone(),

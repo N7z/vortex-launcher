@@ -76,6 +76,22 @@ $XDG_CONFIG_HOME/vortex-launcher/config.json
 
 By default the game is allowed to update itself on start; the checkbox turns that off by setting `VORTEX_NO_UPDATE=1`.
 
+## Black screen, but the sound is playing
+
+If the game window is black (or shows only the void) while audio and input keep working, tick **Use Microsoft's shader compiler** in the launcher and start the game again.
+
+Vortex compiles its shaders at runtime. Under Proton that goes through vkd3d-shader, which on some GPUs rejects shaders the real compiler accepts, the game then keeps presenting frames it never drew into, so you get a black screen on a game that's running fine. The checkbox installs Microsoft's `d3dcompiler_47` into the prefix (via [winetricks](https://github.com/Winetricks/winetricks), which must be installed) and tells wine to use it.
+
+You can confirm it is this and not something else in `logs/game.log`, which will hold both of:
+
+```
+vkd3d:warn:vkd3d:hresult_from_vkd3d_result Invalid shader.
+warn:vkd3d-proton:dxgi_vk_swap_chain_record_render_pass:
+     Application is presenting user index 0, but it has never been rendered to.
+```
+
+The option is off by default because it changes the shader compiler for everyone who turns it on, and most GPUs never hit the bug.
+
 Special thanks to KitKat for the Logo!
 
 ## License

@@ -13,6 +13,9 @@ pub struct Config {
     pub proton: Option<ProtonInstall>,
     /// on by default, a pinned old client cannot join a patched server
     pub allow_self_update: bool,
+    /// off by default: it only helps the GPUs where vkd3d-shader miscompiles,
+    /// and turning it on for everyone would change a rendering path that works
+    pub native_shader_compiler: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

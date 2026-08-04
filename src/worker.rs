@@ -18,6 +18,7 @@ pub enum Job {
     CheckUpdate,
     Play,
     SetSelfUpdate(bool),
+    SetNativeShaderCompiler(bool),
     SignIn { username: String, password: String },
     Submit2fa(String),
     SignOut,
@@ -86,6 +87,7 @@ fn run(shared: Arc<Shared>, paths: Paths, inbox: Receiver<Job>) {
                 publish(&ctx);
                 ctx.config.save(&ctx.paths.config_file())
             }
+            Job::SetNativeShaderCompiler(value) => set_native_shader_compiler(&mut ctx, value),
             Job::SignIn { username, password } => sign_in(&mut ctx, &username, &password),
             Job::Submit2fa(code) => submit_2fa(&mut ctx, &code),
             Job::SignOut => sign_out(&mut ctx),
@@ -130,12 +132,14 @@ fn publish(ctx: &Ctx) {
     let proton_ready = ctx.config.proton_ready();
     let proton_name = ctx.config.proton.as_ref().map(|p| p.name.clone());
     let allow_self_update = ctx.config.allow_self_update;
+    let native_shader_compiler = ctx.config.native_shader_compiler;
     let account = ctx.session.as_ref().map(|s| s.username.clone());
     ctx.shared.update(|status| {
         status.game_ready = game_ready;
         status.proton_ready = proton_ready;
         status.proton_name = proton_name;
         status.allow_self_update = allow_self_update;
+        status.native_shader_compiler = native_shader_compiler;
         status.account = account;
     });
 }
@@ -143,6 +147,14 @@ fn publish(ctx: &Ctx) {
 fn detect(ctx: &mut Ctx) -> Result<()> {
     ctx.shared.begin(Task::Detecting);
     ctx.paths.ensure()?;
+
+    // a recreated prefix takes the DLL with it, and an override pointing at
+    // nothing would leave the checkbox claiming a fix that is not in effect
+    if ctx.config.native_shader_compiler && !crate::shaders::is_installed(&ctx.paths) {
+        ctx.config.native_shader_compiler = false;
+        ctx.shared
+            .log("native d3dcompiler_47 is not in the prefix, turning the option back off");
+    }
 
     if !ctx.config.game_ready() {
         ctx.config.game = None;
@@ -250,6 +262,24 @@ fn check_update(agent: &ureq::Agent, ctx: &mut Ctx) -> Result<()> {
     publish(ctx);
     ctx.shared.update(|status| status.update_available = false);
     Ok(())
+}
+
+/// turning this on has to fetch the DLL first, and a failed fetch must leave the
+/// checkbox unticked rather than promising an override that will not resolve
+fn set_native_shader_compiler(ctx: &mut Ctx, value: bool) -> Result<()> {
+    ctx.config.native_shader_compiler = value;
+    publish(ctx);
+
+    if value && !crate::shaders::is_installed(&ctx.paths) {
+        ctx.shared.begin(Task::InstallingCompiler);
+        if let Err(err) = crate::shaders::install(&ctx.paths, &ctx.config, &ctx.shared) {
+            ctx.config.native_shader_compiler = false;
+            publish(ctx);
+            ctx.config.save(&ctx.paths.config_file()).ok();
+            return Err(err.context("could not install the shader compiler, the option stayed off"));
+        }
+    }
+    ctx.config.save(&ctx.paths.config_file())
 }
 
 fn sign_in(ctx: &mut Ctx, username: &str, password: &str) -> Result<()> {

@@ -13,6 +13,7 @@ mod net;
 mod paths;
 mod proton;
 mod session;
+mod shaders;
 mod state;
 mod worker;
 
