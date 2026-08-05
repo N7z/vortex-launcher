@@ -80,7 +80,10 @@ pub fn install(paths: &Paths, config: &Config, shared: &Arc<Shared>) -> Result<(
     let Some(winetricks) = winetricks() else {
         bail!("winetricks is not installed, install it and try again");
     };
-    let proton = config.proton.as_ref().context("Proton is not installed yet")?;
+    let proton = config
+        .proton
+        .as_ref()
+        .context("Proton is not installed yet")?;
 
     shared.log(format!("installing native {DLL} via winetricks"));
     let mut command = Command::new(&winetricks);
@@ -94,9 +97,11 @@ pub fn install(paths: &Paths, config: &Config, shared: &Arc<Shared>) -> Result<(
         .output()
         .with_context(|| format!("cannot run {}", winetricks.display()))?;
     if !output.status.success() {
-        // winetricks explains itself on stderr, the exit code alone says nothing
         let reason = String::from_utf8_lossy(&output.stderr);
-        let reason = reason.lines().rev().find(|line| !line.trim().is_empty());
+        let reason = reason
+            .lines()
+            .rev()
+            .find(|line| line.chars().any(|c| c.is_alphanumeric()));
         match reason {
             Some(line) => bail!("winetricks could not install {DLL}: {line}"),
             None => bail!("winetricks could not install {DLL}"),
