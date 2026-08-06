@@ -11,7 +11,7 @@
 
 </div>
 
-Unofficial Linux launcher for [Vortex](https://playvortex.io). Native GUI, no webview, no terminal. It downloads the Windows build and Proton for you on first run and starts the game under a private wine prefix.
+Unofficial Linux launcher for [Vortex](https://playvortex.io). Native GUI, no webview, no terminal. It downloads the Windows build and Proton for you on first run and starts the game under a private wine prefix. A headless companion, `vortex-launcher-cli`, signs in and launches from the terminal in a 1.8 MB binary with no GUI stack linked at all.
 
 Not affiliated with or endorsed by the Vortex developers. No game files are redistributed here; everything is fetched from the official download URL at runtime.
 
@@ -25,8 +25,8 @@ The other two Linux launchers are [Riko](https://github.com/Arbuzyonak/Riko) (Ta
 
 | | vortex-launcher | Riko | Tempest |
 |---|---|---|---|
-| UI | egui (native) | webview | CLI only |
-| binary | 7.9 MB | 12.7 MB | 5.5 MB |
+| UI | egui (native), plus a CLI | webview | CLI only |
+| binary | 7.9 MB GUI, 1.8 MB CLI | 12.7 MB | 5.5 MB |
 | RAM idle | ~55 MiB PSS | ~226 MiB PSS | none |
 | you must install | nothing | Wine, webkit2gtk | Wine (its installer does it) |
 | wine | downloads GE-Proton itself | system Wine | system Wine |
@@ -47,6 +47,27 @@ Measured on my machine (Arch, Wayland, Mesa): 7.9 MB stripped, window up in ~40 
 cargo build --release
 ./target/release/vortex-launcher
 ```
+
+The CLI is 1.8 MB — build it with the GUI stack left out entirely:
+
+```sh
+cargo build --release --bin vortex-launcher-cli --no-default-features
+```
+
+## The CLI
+
+`vortex-launcher-cli` shares the session, config, and install with the GUI — installing Vortex and Proton still happens in the GUI, once.
+
+```
+vortex-launcher-cli              start Vortex.exe (no game is joined)
+vortex-launcher-cli login        sign in from the terminal (hidden password, 2FA)
+vortex-launcher-cli logout       forget the stored session
+vortex-launcher-cli whoami       show the signed-in account
+vortex-launcher-cli games        list games and player counts
+vortex-launcher-cli play <id>    launch straight into a game
+```
+
+It stays attached until the game exits, so a crash on startup prints the error instead of disappearing; full output lands in `logs/game.log` either way.
 
 ## What it does on first run
 
