@@ -48,7 +48,7 @@ cargo build --release
 ./target/release/vortex-launcher
 ```
 
-The CLI is 1.8 MB — build it with the GUI stack left out entirely:
+The CLI is 1.8 MB. Build it with the GUI stack left out entirely:
 
 ```sh
 cargo build --release --bin vortex-launcher-cli --no-default-features
@@ -56,7 +56,7 @@ cargo build --release --bin vortex-launcher-cli --no-default-features
 
 ## The CLI
 
-`vortex-launcher-cli` shares the session, config, and install with the GUI — installing Vortex and Proton still happens in the GUI, once.
+`vortex-launcher-cli` shares the session, config, and install with the GUI. Installing Vortex and Proton still happens in the GUI, once.
 
 ```
 vortex-launcher-cli              start Vortex.exe (no game is joined)
