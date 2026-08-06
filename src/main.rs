@@ -1,23 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #![forbid(unsafe_code)]
 
-mod app;
-mod auth;
-mod config;
-mod desktop;
-mod game;
-mod ipc;
-mod launch;
-mod logo;
-mod net;
-mod paths;
-mod proton;
-mod session;
-mod shaders;
-mod state;
-mod worker;
-
 use eframe::egui;
+use vortex_launcher::{app, auth, desktop, ipc, logo, paths};
 
 fn icon() -> egui::IconData {
     match logo::decode() {

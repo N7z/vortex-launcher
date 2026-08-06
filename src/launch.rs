@@ -21,7 +21,7 @@ fn python() -> Result<PathBuf> {
             return Ok(candidate);
         }
     }
-    bail!("python3 was not found, install it with your package manager (Proton needs it)")
+    bail!("python3 was not found.")
 }
 
 pub fn launch(
@@ -30,8 +30,14 @@ pub fn launch(
     shared: &Arc<Shared>,
     uri: Option<&str>,
 ) -> Result<()> {
-    let game = config.game.as_ref().context("Vortex is not installed yet")?;
-    let proton = config.proton.as_ref().context("Proton is not installed yet")?;
+    let game = config
+        .game
+        .as_ref()
+        .context("Vortex is not installed yet")?;
+    let proton = config
+        .proton
+        .as_ref()
+        .context("Proton is not installed yet")?;
 
     if !game.exe.is_file() {
         bail!("{} is missing, reinstall Vortex", game.exe.display());
@@ -72,7 +78,10 @@ pub fn launch(
     if config.native_shader_compiler {
         // proton rebuilds WINEDLLOVERRIDES itself and merges PROTON_DLL_OVERRIDES
         // into it, so set both and keep whatever the user already exported
-        command.env("PROTON_DLL_OVERRIDES", merge_overrides("PROTON_DLL_OVERRIDES"));
+        command.env(
+            "PROTON_DLL_OVERRIDES",
+            merge_overrides("PROTON_DLL_OVERRIDES"),
+        );
         command.env("WINEDLLOVERRIDES", merge_overrides("WINEDLLOVERRIDES"));
     }
 
@@ -109,8 +118,10 @@ pub fn launch(
                         .code()
                         .map(|c| c.to_string())
                         .unwrap_or_else(|| "a signal".into());
-                    let message =
-                        format!("Vortex closed immediately (exit {code}). Full output in {}", log_path.display());
+                    let message = format!(
+                        "Vortex closed immediately (exit {code}). Full output in {}",
+                        log_path.display()
+                    );
                     shared.update(|status| status.error = Some(message));
                 }
             }

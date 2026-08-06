@@ -1,11 +1,23 @@
 [package]
 name = "vortex-launcher"
-version = "1.0.2"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Unofficial native Linux launcher for Vortex"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/paulinho/vortex-launcher"
+
+[lib]
+name = "vortex_launcher"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vortex-launcher"
+path = "src/main.rs"
+
+[[bin]]
+name = "vortex-launcher-cli"
+path = "src/bin/cli.rs"
 
 [dependencies]
 eframe = { version = "0.35", default-features = false, features = [
