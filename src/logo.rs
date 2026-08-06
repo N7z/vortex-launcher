@@ -7,12 +7,14 @@ pub fn png_bytes() -> &'static [u8] {
     BYTES
 }
 
+#[cfg(feature = "gui")]
 pub struct Image {
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
 }
 
+#[cfg(feature = "gui")]
 pub fn decode() -> Option<Image> {
     let decoder = png::Decoder::new(std::io::Cursor::new(BYTES));
     let mut reader = decoder.read_info().ok()?;

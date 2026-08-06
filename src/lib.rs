@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "gui")]
 pub mod app;
 pub mod auth;
 pub mod config;

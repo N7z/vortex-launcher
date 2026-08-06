@@ -61,7 +61,7 @@ pub struct Status {
 pub struct Shared {
     status: Mutex<Status>,
     cancel: AtomicBool,
-    ctx: Mutex<Option<eframe::egui::Context>>,
+    repaint: Mutex<Option<Box<dyn Fn() + Send>>>,
     log: Mutex<Option<std::fs::File>>,
 }
 
@@ -73,14 +73,15 @@ impl Shared {
         Arc::new(Self {
             status: Mutex::new(Status::default()),
             cancel: AtomicBool::new(false),
-            ctx: Mutex::new(None),
+            repaint: Mutex::new(None),
             log: Mutex::new(std::fs::File::create(log_path).ok()),
         })
     }
 
-    pub fn attach(&self, ctx: eframe::egui::Context) {
-        if let Ok(mut slot) = self.ctx.lock() {
-            *slot = Some(ctx);
+    /// hook the UI's repaint in; headless callers just never attach one
+    pub fn attach(&self, repaint: impl Fn() + Send + 'static) {
+        if let Ok(mut slot) = self.repaint.lock() {
+            *slot = Some(Box::new(repaint));
         }
     }
 
@@ -145,9 +146,9 @@ impl Shared {
     }
 
     fn repaint(&self) {
-        if let Ok(ctx) = self.ctx.lock() {
-            if let Some(ctx) = ctx.as_ref() {
-                ctx.request_repaint();
+        if let Ok(repaint) = self.repaint.lock() {
+            if let Some(repaint) = repaint.as_ref() {
+                repaint();
             }
         }
     }

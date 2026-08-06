@@ -1,6 +1,6 @@
 [package]
 name = "vortex-launcher"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Unofficial native Linux launcher for Vortex"
@@ -14,13 +14,18 @@ path = "src/lib.rs"
 [[bin]]
 name = "vortex-launcher"
 path = "src/main.rs"
+required-features = ["gui"]
 
 [[bin]]
 name = "vortex-launcher-cli"
 path = "src/bin/cli.rs"
 
+[features]
+default = ["gui"]
+gui = ["dep:eframe", "dep:png", "dep:epaint_default_fonts"]
+
 [dependencies]
-eframe = { version = "0.35", default-features = false, features = [
+eframe = { version = "0.35", optional = true, default-features = false, features = [
     "glow",
     "wayland",
     "x11",
@@ -34,8 +39,8 @@ flate2 = "1"
 sha2 = "0.11"
 dirs = "6"
 anyhow = "1"
-png = "0.18"
-epaint_default_fonts = "0.35"
+png = { version = "0.18", optional = true }
+epaint_default_fonts = { version = "0.35", optional = true }
 
 [profile.release]
 opt-level = "z"

@@ -36,7 +36,8 @@ impl App {
             cc.egui_ctx.load_texture("logo", texture, egui::TextureOptions::LINEAR)
         });
         let shared = Shared::new(&paths.logs().join("launcher.log"));
-        shared.attach(cc.egui_ctx.clone());
+        let egui_ctx = cc.egui_ctx.clone();
+        shared.attach(move || egui_ctx.request_repaint());
         if let Some(note) = desktop_note {
             shared.log(note);
         }
