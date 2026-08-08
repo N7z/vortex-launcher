@@ -6,7 +6,7 @@ use std::io::{BufRead, Write};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
-use vortex_launcher::{auth, config::Config, launch, paths::Paths, session, state::Shared};
+use vortex_launcher::{auth, config::Config, ipc, launch, paths::Paths, session, state::Shared};
 
 const HELP: &str = "\
 vortex-launcher-cli — headless Vortex launcher
@@ -18,6 +18,7 @@ USAGE:
     vortex-launcher-cli whoami       show the signed-in account
     vortex-launcher-cli games        list games and player counts
     vortex-launcher-cli play <id>    launch straight into a game
+    vortex-launcher-cli vortex://…   open a link from the browser (no GUI)
     vortex-launcher-cli help         show this help
 
 Installing Vortex and Proton still happens in the GUI (vortex-launcher).";
@@ -54,6 +55,14 @@ fn run() -> Result<()> {
         Some("help") | Some("--help") | Some("-h") => {
             println!("{HELP}");
             Ok(())
+        }
+        // the browser hands us a vortex:// link; a launcher window that is already
+        // open should keep it, otherwise we launch it here with no GUI at all
+        Some(uri) if auth::is_launch_uri(uri) => {
+            if ipc::send(uri) {
+                return Ok(());
+            }
+            launch_game(&paths, Some(uri))
         }
         Some(other) => bail!("unknown command `{other}`\n\n{HELP}"),
     }

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 const FILE: &str = "vortex-launcher.desktop";
+const HANDLER_FILE: &str = "vortex-launcher-uri.desktop";
 const ICON: &str = "vortex-launcher";
 
 fn applications_dir() -> Option<PathBuf> {
@@ -32,6 +33,17 @@ fn install_icon() -> Result<()> {
     Ok(())
 }
 
+/// a link from the browser needs no window, so the headless binary handles it when
+/// it sits next to us; falls back to the given exe when only the GUI is installed
+fn handler_exe(exe: &str) -> String {
+    let cli = PathBuf::from(exe).with_file_name("vortex-launcher-cli");
+    if cli.is_file() {
+        return cli.display().to_string();
+    }
+    exe.to_owned()
+}
+
+/// the menu entry: always the GUI, and it does not claim the scheme
 fn entry(exe: &str) -> String {
     format!(
         "[Desktop Entry]\n\
@@ -43,31 +55,53 @@ fn entry(exe: &str) -> String {
          Terminal=false\n\
          Categories=Game;\n\
          Keywords=vortex;\n\
-         StartupWMClass=vortex-launcher\n\
-         MimeType=x-scheme-handler/vortex;\n"
+         StartupWMClass=vortex-launcher\n"
     )
 }
 
-/// writes the entry and claims the scheme, only when something actually changed
+/// the vortex:// handler, hidden from the menu so only the browser reaches it
+fn handler_entry(exe: &str) -> String {
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=Vortex Launcher (link handler)\n\
+         Comment=Opens vortex:// links without a window\n\
+         Exec={exe} %u\n\
+         Icon={ICON}\n\
+         Terminal=false\n\
+         NoDisplay=true\n\
+         Categories=Game;\n\
+         MimeType=x-scheme-handler/vortex;\n",
+        exe = handler_exe(exe)
+    )
+}
+
+/// writes the entries and claims the scheme, only when something actually changed
 pub fn install() -> Result<bool> {
     let dir = applications_dir().context("no XDG data directory")?;
     let exe = std::env::current_exe()
         .context("cannot find our own path")?
         .display()
         .to_string();
-    let wanted = entry(&exe);
-    let path = dir.join(FILE);
     install_icon()?;
 
-    if std::fs::read_to_string(&path).is_ok_and(|found| found == wanted) {
+    let files = [(FILE, entry(&exe)), (HANDLER_FILE, handler_entry(&exe))];
+    let mut changed = false;
+    for (name, wanted) in &files {
+        let path = dir.join(name);
+        if std::fs::read_to_string(&path).is_ok_and(|found| &found == wanted) {
+            continue;
+        }
+        std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+        std::fs::write(&path, wanted).with_context(|| format!("cannot write {}", path.display()))?;
+        changed = true;
+    }
+    if !changed {
         return Ok(false);
     }
 
-    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    std::fs::write(&path, &wanted).with_context(|| format!("cannot write {}", path.display()))?;
-
     run("update-desktop-database", &[dir.to_string_lossy().as_ref()]);
-    run("xdg-mime", &["default", FILE, "x-scheme-handler/vortex"]);
+    run("xdg-mime", &["default", HANDLER_FILE, "x-scheme-handler/vortex"]);
     Ok(true)
 }
 

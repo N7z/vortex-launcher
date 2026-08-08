@@ -80,7 +80,9 @@ An existing Steam or `compatibilitytools.d` Proton is picked up and reused inste
 
 ## Links from the browser
 
-On start the launcher writes `~/.local/share/applications/vortex-launcher.desktop` and claims `x-scheme-handler/vortex`, so pressing Play on the website opens the game here. It is rewritten only when missing or out of date, e.g after the binary moves.
+On start the launcher writes two entries under `~/.local/share/applications/`: `vortex-launcher.desktop` for the menu, and a hidden `vortex-launcher-uri.desktop` that claims `x-scheme-handler/vortex`, so pressing Play on the website opens the game here. They are rewritten only when missing or out of date, e.g after the binary moves.
+
+A link from the browser needs no window, so the handler runs `vortex-launcher-cli` when it sits next to the GUI binary, and the GUI itself otherwise.
 
 Only one launcher runs at a time: a second start hands its link to the first over `$XDG_RUNTIME_DIR/vortex-launcher.sock` and exits. A link that arrives before anything is installed waits for the install instead of being dropped.
 
