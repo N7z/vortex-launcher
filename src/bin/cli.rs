@@ -6,7 +6,9 @@ use std::io::{BufRead, Write};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
-use vortex_launcher::{auth, config::Config, ipc, launch, paths::Paths, session, state::Shared};
+use vortex_launcher::{
+    auth, config::Config, ipc, launch, net, paths::Paths, session, state::Shared, studio,
+};
 
 const HELP: &str = "\
 vortex-launcher-cli — headless Vortex launcher
@@ -18,6 +20,7 @@ USAGE:
     vortex-launcher-cli whoami       show the signed-in account
     vortex-launcher-cli games        list games and player counts
     vortex-launcher-cli play <id>    launch straight into a game
+    vortex-launcher-cli studio       install (first time) and open Vortex Studio
     vortex-launcher-cli vortex://…   open a link from the browser (no GUI)
     vortex-launcher-cli help         show this help
 
@@ -44,6 +47,7 @@ fn run() -> Result<()> {
         }
         Some("whoami") => whoami(&paths),
         Some("games") => games(),
+        Some("studio") => open_studio(&paths),
         Some("play") => {
             let id: u64 = args
                 .get(1)
@@ -56,13 +60,17 @@ fn run() -> Result<()> {
             println!("{HELP}");
             Ok(())
         }
-        // the browser hands us a vortex:// link; a launcher window that is already
-        // open should keep it, otherwise we launch it here with no GUI at all
         Some(uri) if auth::is_launch_uri(uri) => {
             if ipc::send(uri) {
                 return Ok(());
             }
-            launch_game(&paths, Some(uri))
+            launch_program(&paths, launch::Target::Game, Some(uri))
+        }
+        Some(uri) if auth::is_studio_uri(uri) => {
+            if ipc::send(uri) {
+                return Ok(());
+            }
+            launch_program(&paths, launch::Target::Studio, Some(uri))
         }
         Some(other) => bail!("unknown command `{other}`\n\n{HELP}"),
     }
@@ -122,17 +130,72 @@ fn play(paths: &Paths, game_id: u64) -> Result<()> {
     launch_game(paths, Some(&uri))
 }
 
-fn launch_game(paths: &Paths, uri: Option<&str>) -> Result<()> {
-    let config = Config::load(&paths.config_file());
-    if config.game.is_none() || config.proton.is_none() {
-        bail!("Vortex or Proton is not installed yet, run the GUI (vortex-launcher) once to install");
+fn open_studio(paths: &Paths) -> Result<()> {
+    let session = session::load(&paths.session_file()).context("not signed in, run `login`")?;
+    let mut config = Config::load(&paths.config_file());
+    if config.proton.is_none() {
+        bail!("Proton is not installed yet, run the GUI (vortex-launcher) once to install");
     }
 
     let shared = Shared::new(&paths.logs().join("cli.log"));
-    launch::launch(paths, &config, &shared, uri)?;
+    if !config.studio_ready() {
+        paths.ensure()?;
+        println!("downloading Vortex Studio...");
+        let agent = net::agent();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        config.studio = Some(studio::install(
+            &agent,
+            paths,
+            &shared,
+            &cancel,
+            &session.token,
+        )?);
+        config.save(&paths.config_file())?;
+        println!("studio installed");
+    }
+
+    let uri = auth::studio_uri(&session.token)?;
+    launch_with(paths, &config, &shared, launch::Target::Studio, Some(&uri))
+}
+
+fn launch_game(paths: &Paths, uri: Option<&str>) -> Result<()> {
+    launch_program(paths, launch::Target::Game, uri)
+}
+
+fn launch_program(paths: &Paths, target: launch::Target, uri: Option<&str>) -> Result<()> {
+    let config = Config::load(&paths.config_file());
+    if config.proton.is_none() {
+        bail!("Proton is not installed yet, run the GUI (vortex-launcher) once to install");
+    }
+    match target {
+        launch::Target::Game if config.game.is_none() => {
+            bail!("Vortex is not installed yet, run the GUI (vortex-launcher) once to install")
+        }
+        launch::Target::Studio if config.studio.is_none() => {
+            bail!("Vortex Studio is not installed yet, run `vortex-launcher-cli studio` first")
+        }
+        _ => {}
+    }
+
+    let shared = Shared::new(&paths.logs().join("cli.log"));
+    launch_with(paths, &config, &shared, target, uri)
+}
+
+fn launch_with(
+    paths: &Paths,
+    config: &Config,
+    shared: &std::sync::Arc<Shared>,
+    target: launch::Target,
+    uri: Option<&str>,
+) -> Result<()> {
+    let (what, log) = match target {
+        launch::Target::Game => ("vortex", "game.log"),
+        launch::Target::Studio => ("vortex studio", "studio.log"),
+    };
+    launch::launch_target(paths, config, shared, target, uri)?;
     println!(
-        "vortex is running (output in {})",
-        paths.logs().join("game.log").display()
+        "{what} is running (output in {})",
+        paths.logs().join(log).display()
     );
 
     // launch() hands the child to a background thread; stay alive until it exits
@@ -140,13 +203,19 @@ fn launch_game(paths: &Paths, uri: Option<&str>) -> Result<()> {
     loop {
         std::thread::sleep(std::time::Duration::from_millis(300));
         let (running, error) = shared
-            .read(|status| (status.game_running, status.error.clone()))
+            .read(|status| {
+                let running = match target {
+                    launch::Target::Game => status.game_running,
+                    launch::Target::Studio => status.studio_running,
+                };
+                (running, status.error.clone())
+            })
             .unwrap_or((false, None));
         if let Some(error) = error {
             bail!("{error}");
         }
         if !running {
-            println!("vortex exited");
+            println!("{what} exited");
             return Ok(());
         }
     }

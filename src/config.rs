@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Config {
     pub game: Option<GameInstall>,
+    pub studio: Option<GameInstall>,
     pub proton: Option<ProtonInstall>,
     /// on by default, a pinned old client cannot join a patched server
     pub allow_self_update: bool,
@@ -66,6 +67,10 @@ impl Config {
 
     pub fn game_ready(&self) -> bool {
         self.game.as_ref().is_some_and(|g| g.exe.is_file())
+    }
+
+    pub fn studio_ready(&self) -> bool {
+        self.studio.as_ref().is_some_and(|s| s.exe.is_file())
     }
 
     pub fn proton_ready(&self) -> bool {

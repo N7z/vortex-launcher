@@ -33,8 +33,6 @@ fn install_icon() -> Result<()> {
     Ok(())
 }
 
-/// a link from the browser needs no window, so the headless binary handles it when
-/// it sits next to us; falls back to the given exe when only the GUI is installed
 fn handler_exe(exe: &str) -> String {
     let cli = PathBuf::from(exe).with_file_name("vortex-launcher-cli");
     if cli.is_file() {
@@ -43,7 +41,6 @@ fn handler_exe(exe: &str) -> String {
     exe.to_owned()
 }
 
-/// the menu entry: always the GUI, and it does not claim the scheme
 fn entry(exe: &str) -> String {
     format!(
         "[Desktop Entry]\n\
@@ -59,7 +56,6 @@ fn entry(exe: &str) -> String {
     )
 }
 
-/// the vortex:// handler, hidden from the menu so only the browser reaches it
 fn handler_entry(exe: &str) -> String {
     format!(
         "[Desktop Entry]\n\
@@ -71,7 +67,7 @@ fn handler_entry(exe: &str) -> String {
          Terminal=false\n\
          NoDisplay=true\n\
          Categories=Game;\n\
-         MimeType=x-scheme-handler/vortex;\n",
+         MimeType=x-scheme-handler/vortex;x-scheme-handler/vortex-studio;\n",
         exe = handler_exe(exe)
     )
 }
@@ -101,7 +97,15 @@ pub fn install() -> Result<bool> {
     }
 
     run("update-desktop-database", &[dir.to_string_lossy().as_ref()]);
-    run("xdg-mime", &["default", HANDLER_FILE, "x-scheme-handler/vortex"]);
+    run(
+        "xdg-mime",
+        &[
+            "default",
+            HANDLER_FILE,
+            "x-scheme-handler/vortex",
+            "x-scheme-handler/vortex-studio",
+        ],
+    );
     Ok(true)
 }
 

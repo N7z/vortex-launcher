@@ -65,6 +65,7 @@ vortex-launcher-cli logout       forget the stored session
 vortex-launcher-cli whoami       show the signed-in account
 vortex-launcher-cli games        list games and player counts
 vortex-launcher-cli play <id>    launch straight into a game
+vortex-launcher-cli studio       install (first time) and open Vortex Studio
 ```
 
 It stays attached until the game exits, so a crash on startup prints the error instead of disappearing; full output lands in `logs/game.log` either way.
@@ -78,9 +79,15 @@ It stays attached until the game exits, so a crash on startup prints the error i
 
 An existing Steam or `compatibilitytools.d` Proton is picked up and reused instead of downloading, when one is present.
 
+## Vortex Studio
+
+Studio is the creator tool and it is not part of the game download. The launcher fetches it on demand, into its own directory and the same wine prefix: "Install Studio" in the GUI, or `vortex-launcher-cli studio`.
+
+Unlike the game, its zip is only served to signed-in users, so the download itself carries your session cookie and you have to be signed in before the first install. Opening it works the same way as the game: the launcher asks the site for a fresh `vortex-studio://` link and hands it to `VortexStudio.exe`.
+
 ## Links from the browser
 
-On start the launcher writes two entries under `~/.local/share/applications/`: `vortex-launcher.desktop` for the menu, and a hidden `vortex-launcher-uri.desktop` that claims `x-scheme-handler/vortex`, so pressing Play on the website opens the game here. They are rewritten only when missing or out of date, e.g after the binary moves.
+On start the launcher writes two entries under `~/.local/share/applications/`: `vortex-launcher.desktop` for the menu, and a hidden `vortex-launcher-uri.desktop` that claims `x-scheme-handler/vortex` and `x-scheme-handler/vortex-studio`, so pressing Play (or Open in Studio) on the website opens it here. They are rewritten only when missing or out of date, e.g after the binary moves.
 
 A link from the browser needs no window, so the handler runs `vortex-launcher-cli` when it sits next to the GUI binary, and the GUI itself otherwise.
 
@@ -91,12 +98,14 @@ Only one launcher runs at a time: a second start hands its link to the first ove
 ```
 $XDG_DATA_HOME/vortex-launcher/
     game/           extracted game, Vortex.exe
+    studio/         extracted studio, VortexStudio.exe
     proton/         GE-Proton builds this launcher downloaded
     prefix/         the wine prefix (pfx/ inside)
     compat-client/  STEAM_COMPAT_CLIENT_INSTALL_PATH stand-in
     downloads/      partial downloads, resumed on the next run
     session.json    your session token, mode 0600
     logs/game.log       last session's game output
+    logs/studio.log     last session's studio output
     logs/launcher.log   what the launcher itself did, rewritten each run
 $XDG_CONFIG_HOME/vortex-launcher/config.json
 ```

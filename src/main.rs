@@ -17,7 +17,9 @@ fn icon() -> egui::IconData {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let paths = paths::Paths::discover()?;
-    let uri = std::env::args().nth(1).filter(|arg| auth::is_launch_uri(arg));
+    let uri = std::env::args()
+        .nth(1)
+        .filter(|arg| auth::is_launch_uri(arg) || auth::is_studio_uri(arg));
 
     // a link from the browser belongs in the window that is already open
     let Some(listener) = ipc::listen() else {

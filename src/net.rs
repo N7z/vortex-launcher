@@ -59,13 +59,22 @@ impl Remote {
 
 /// one-byte ranged GET, because HEAD on the download route answers 404
 pub fn probe(agent: &ureq::Agent, url: &str) -> Result<Remote> {
-    let response = agent
-        .get(url)
-        .header("Range", "bytes=0-0")
+    probe_as(agent, url, None)
+}
+
+pub fn probe_as(agent: &ureq::Agent, url: &str, token: Option<&str>) -> Result<Remote> {
+    let mut request = agent.get(url).header("Range", "bytes=0-0");
+    if let Some(token) = token {
+        request = request.header("Cookie", format!("session_token={token}"));
+    }
+    let response = request
         .call()
         .with_context(|| format!("cannot reach {url}"))?;
 
     let status = response.status().as_u16();
+    if status == 401 || status == 403 || status == 404 && token.is_some() {
+        bail!("{url} answered HTTP {status} (session expired?)");
+    }
     if !(200..300).contains(&status) {
         bail!("{url} answered HTTP {status}");
     }
@@ -101,6 +110,17 @@ pub fn download(
     url: &str,
     dest: &Path,
     cancel: &AtomicBool,
+    on_progress: impl FnMut(u64, u64),
+) -> Result<()> {
+    download_as(agent, url, None, dest, cancel, on_progress)
+}
+
+pub fn download_as(
+    agent: &ureq::Agent,
+    url: &str,
+    token: Option<&str>,
+    dest: &Path,
+    cancel: &AtomicBool,
     mut on_progress: impl FnMut(u64, u64),
 ) -> Result<()> {
     let already = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
@@ -109,9 +129,15 @@ pub fn download(
     if already > 0 {
         request = request.header("Range", format!("bytes={already}-"));
     }
+    if let Some(token) = token {
+        request = request.header("Cookie", format!("session_token={token}"));
+    }
     let response = request.call().with_context(|| format!("cannot download {url}"))?;
 
     let status = response.status().as_u16();
+    if status == 401 || status == 403 || status == 404 && token.is_some() {
+        bail!("{url} answered HTTP {status} (session expired?)");
+    }
     if !(200..300).contains(&status) {
         bail!("{url} answered HTTP {status}");
     }

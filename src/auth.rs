@@ -4,6 +4,7 @@
 use anyhow::{bail, Context, Result};
 
 pub const BASE: &str = "https://playvortex.io";
+pub const STUDIO_SCHEME: &str = "vortex-studio://";
 
 pub enum Login {
     Done(String),
@@ -195,11 +196,35 @@ pub fn play_uri(token: &str, game_id: u64, instance: Option<&str>) -> Result<Str
         .body_mut()
         .read_to_string()
         .context("cannot read the play page")?;
-    extract_uri(&html).context("the play page had no vortex:// link, the site may have changed")
+    extract_uri(&html, "vortex://")
+        .context("the play page had no vortex:// link, the site may have changed")
 }
 
-fn extract_uri(html: &str) -> Option<String> {
-    let start = html.find("vortex://")?;
+pub fn studio_uri(token: &str) -> Result<String> {
+    let mut response = agent()
+        .get(format!("{BASE}/studio/launch"))
+        .header("Cookie", format!("session_token={token}"))
+        .call()
+        .context("cannot reach the studio launch page")?;
+
+    let status = response.status().as_u16();
+    if status == 401 || status == 403 || (300..400).contains(&status) {
+        bail!("session expired (the studio page answered HTTP {status})");
+    }
+    if !(200..300).contains(&status) {
+        bail!("the studio launch page answered HTTP {status}");
+    }
+
+    let html = response
+        .body_mut()
+        .read_to_string()
+        .context("cannot read the studio launch page")?;
+    extract_uri(&html, STUDIO_SCHEME)
+        .context("the studio page had no vortex-studio:// link, the site may have changed")
+}
+
+fn extract_uri(html: &str, scheme: &str) -> Option<String> {
+    let start = html.find(scheme)?;
     let rest = &html[start..];
     let end = rest
         .find(|c: char| c == '"' || c == '\'' || c == '<' || c.is_whitespace())
@@ -209,7 +234,15 @@ fn extract_uri(html: &str) -> Option<String> {
 
 /// nothing but a vortex:// uri ever reaches the game's argv
 pub fn is_launch_uri(uri: &str) -> bool {
-    uri.starts_with("vortex://")
+    is_uri(uri, "vortex://")
+}
+
+pub fn is_studio_uri(uri: &str) -> bool {
+    is_uri(uri, STUDIO_SCHEME)
+}
+
+fn is_uri(uri: &str, scheme: &str) -> bool {
+    uri.starts_with(scheme)
         && uri.len() <= 4096
         && !uri.contains(char::is_whitespace)
         && !uri.contains('\0')
@@ -248,10 +281,19 @@ mod tests {
     fn pulls_the_uri_out_of_the_page() {
         let html = r#"<a id="go" href="vortex://launch?token=abc&game=3">Play</a>"#;
         assert_eq!(
-            extract_uri(html).as_deref(),
+            extract_uri(html, "vortex://").as_deref(),
             Some("vortex://launch?token=abc&game=3")
         );
-        assert_eq!(extract_uri("<p>nothing here</p>"), None);
+        assert_eq!(extract_uri("<p>nothing here</p>", "vortex://"), None);
+    }
+
+    #[test]
+    fn pulls_the_studio_uri_out_of_the_page() {
+        let html = r#"window.location = "vortex-studio://open?token=abc";"#;
+        assert_eq!(
+            extract_uri(html, STUDIO_SCHEME).as_deref(),
+            Some("vortex-studio://open?token=abc")
+        );
     }
 
     #[test]
@@ -259,5 +301,12 @@ mod tests {
         assert!(is_launch_uri("vortex://launch?token=abc"));
         assert!(!is_launch_uri("https://evil.example/x"));
         assert!(!is_launch_uri("vortex://a b"));
+    }
+
+    #[test]
+    fn keeps_the_two_schemes_apart() {
+        assert!(is_studio_uri("vortex-studio://open?token=abc"));
+        assert!(!is_launch_uri("vortex-studio://open?token=abc"));
+        assert!(!is_studio_uri("vortex://launch?token=abc"));
     }
 }

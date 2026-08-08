@@ -45,13 +45,13 @@ impl App {
         let worker = Worker::spawn(Arc::clone(&shared), paths);
         worker.send(Job::Detect);
         if let Some(uri) = uri {
-            worker.send(Job::PlayUri(uri));
+            worker.send(uri_job(uri));
         }
 
         let jobs = worker.handle();
         let ctx = cc.egui_ctx.clone();
         crate::ipc::serve(listener, move |message| {
-            jobs.send(Job::PlayUri(message)).ok();
+            jobs.send(uri_job(message)).ok();
             ctx.request_repaint();
         });
 
@@ -63,6 +63,14 @@ impl App {
             password: String::new(),
             code: String::new(),
         }
+    }
+}
+
+fn uri_job(uri: String) -> Job {
+    if crate::auth::is_studio_uri(&uri) {
+        Job::StudioUri(uri)
+    } else {
+        Job::PlayUri(uri)
     }
 }
 
@@ -133,7 +141,7 @@ impl eframe::App for App {
             self.footer(ui, &snapshot);
         });
 
-        if snapshot.game_running || snapshot.task.is_some() {
+        if snapshot.game_running || snapshot.studio_running || snapshot.task.is_some() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
@@ -223,6 +231,25 @@ impl App {
                 ui.label(RichText::new("Vortex is open").color(Color32::from_gray(150)));
             } else if big_button(ui, "Play").clicked() {
                 self.worker.send(Job::Play);
+            }
+
+            ui.add_space(8.0);
+            let studio_label = if snapshot.studio_ready {
+                "Open Studio"
+            } else {
+                "Install Studio"
+            };
+            let studio = ui
+                .add_enabled(
+                    !snapshot.studio_running,
+                    egui::Button::new(studio_label).min_size([230.0, 28.0].into()),
+                )
+                .on_hover_text("Vortex Studio, the creator tool. Downloaded on first use.");
+            if studio.clicked() {
+                self.worker.send(Job::OpenStudio);
+            }
+            if snapshot.studio_running {
+                ui.label(RichText::new("Studio is open").size(11.0).color(Color32::from_gray(150)));
             }
         });
 
@@ -331,6 +358,8 @@ struct Snapshot {
     progress: Option<f32>,
     error: Option<String>,
     game_ready: bool,
+    studio_ready: bool,
+    studio_running: bool,
     proton_ready: bool,
     proton_name: Option<String>,
     game_running: bool,
@@ -351,6 +380,8 @@ impl Snapshot {
             progress: status.progress,
             error: status.error.clone(),
             game_ready: status.game_ready,
+            studio_ready: status.studio_ready,
+            studio_running: status.studio_running,
             proton_ready: status.proton_ready,
             proton_name: status.proton_name.clone(),
             game_running: status.game_running,

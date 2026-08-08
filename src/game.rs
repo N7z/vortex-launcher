@@ -27,8 +27,39 @@ pub fn install(
     shared: &Arc<Shared>,
     cancel: &AtomicBool,
 ) -> Result<GameInstall> {
-    let remote = probe(agent)?;
-    shared.log(format!("vortex build is {}", net::human_bytes(remote.size)));
+    let build = Build {
+        url: DOWNLOAD_URL,
+        token: None,
+        archive: ARCHIVE,
+        exe: EXE,
+        label: "vortex",
+        dir: paths.game(),
+    };
+    install_build(agent, &build, paths, shared, cancel)
+}
+
+pub struct Build<'a> {
+    pub url: &'a str,
+    pub token: Option<&'a str>,
+    pub archive: &'a str,
+    pub exe: &'a str,
+    pub label: &'a str,
+    pub dir: PathBuf,
+}
+
+pub fn install_build(
+    agent: &ureq::Agent,
+    build: &Build<'_>,
+    paths: &Paths,
+    shared: &Arc<Shared>,
+    cancel: &AtomicBool,
+) -> Result<GameInstall> {
+    let remote = net::probe_as(agent, build.url, build.token)?;
+    shared.log(format!(
+        "{} build is {}",
+        build.label,
+        net::human_bytes(remote.size)
+    ));
 
     // zip plus extracted copy, with room to spare
     let needed = remote.size.saturating_mul(3);
@@ -42,13 +73,18 @@ pub fn install(
         }
     }
 
-    let archive = paths.downloads().join(ARCHIVE);
+    let archive = paths.downloads().join(build.archive);
     shared.update(|status| status.detail = "connecting".into());
-    net::download(agent, DOWNLOAD_URL, &archive, cancel, |done, total| {
-        report(shared, done, total);
-    })?;
+    net::download_as(
+        agent,
+        build.url,
+        build.token,
+        &archive,
+        cancel,
+        |done, total| report(shared, done, total),
+    )?;
 
-    let game_dir = paths.game();
+    let game_dir = build.dir.clone();
     shared.update(|status| {
         status.progress = None;
         status.detail = "extracting".into();
@@ -60,7 +96,7 @@ pub fn install(
     crate::paths::create_dir(&game_dir)?;
     extract(&archive, &game_dir, shared)?;
 
-    let exe = find_exe(&game_dir)?;
+    let exe = find_exe(&game_dir, build.exe)?;
     std::fs::remove_file(&archive).ok();
     shared.log(format!("installed {}", exe.display()));
 
@@ -86,8 +122,12 @@ fn report(shared: &Arc<Shared>, done: u64, total: u64) {
 fn extract(archive: &Path, dest: &Path, shared: &Arc<Shared>) -> Result<()> {
     let file = std::fs::File::open(archive)
         .with_context(|| format!("cannot open {}", archive.display()))?;
-    let mut zip = zip::ZipArchive::new(file)
-        .with_context(|| format!("{} is not a valid zip (download corrupt?)", archive.display()))?;
+    let mut zip = zip::ZipArchive::new(file).with_context(|| {
+        format!(
+            "{} is not a valid zip (download corrupt?)",
+            archive.display()
+        )
+    })?;
 
     let count = zip.len();
     for index in 0..count {
@@ -121,7 +161,7 @@ fn extract(archive: &Path, dest: &Path, shared: &Arc<Shared>) -> Result<()> {
     Ok(())
 }
 
-fn find_exe(dir: &Path) -> Result<PathBuf> {
+fn find_exe(dir: &Path, name: &str) -> Result<PathBuf> {
     let mut stack = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
         let entries = std::fs::read_dir(&current)
@@ -133,11 +173,11 @@ fn find_exe(dir: &Path) -> Result<PathBuf> {
             } else if path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.eq_ignore_ascii_case(EXE))
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
             {
                 return Ok(path);
             }
         }
     }
-    bail!("{EXE} was not in the archive, the download may have changed format")
+    bail!("{name} was not in the archive, the download may have changed format")
 }

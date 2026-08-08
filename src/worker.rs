@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::paths::Paths;
 use crate::session::Session;
 use crate::state::{GameRow, Shared, Task};
-use crate::{auth, game, launch, net, proton, session};
+use crate::{auth, game, launch, net, proton, session, studio};
 
 pub enum Job {
     Detect,
@@ -25,6 +25,8 @@ pub enum Job {
     LoadGames,
     SelectGame(u64),
     PlayUri(String),
+    OpenStudio,
+    StudioUri(String),
 }
 
 pub struct Worker {
@@ -93,6 +95,8 @@ fn run(shared: Arc<Shared>, paths: Paths, inbox: Receiver<Job>) {
             Job::SignOut => sign_out(&mut ctx),
             Job::LoadGames => load_games(&ctx),
             Job::PlayUri(uri) => play_uri(&mut ctx, uri),
+            Job::OpenStudio => open_studio(&agent, &mut ctx),
+            Job::StudioUri(uri) => studio_uri(&mut ctx, uri),
             Job::SelectGame(id) => {
                 ctx.selected_game = Some(id);
                 ctx.shared.update(|status| status.selected_game = Some(id));
@@ -129,6 +133,7 @@ fn expired(err: &anyhow::Error) -> bool {
 
 fn publish(ctx: &Ctx) {
     let game_ready = ctx.config.game_ready();
+    let studio_ready = ctx.config.studio_ready();
     let proton_ready = ctx.config.proton_ready();
     let proton_name = ctx.config.proton.as_ref().map(|p| p.name.clone());
     let allow_self_update = ctx.config.allow_self_update;
@@ -136,12 +141,77 @@ fn publish(ctx: &Ctx) {
     let account = ctx.session.as_ref().map(|s| s.username.clone());
     ctx.shared.update(|status| {
         status.game_ready = game_ready;
+        status.studio_ready = studio_ready;
         status.proton_ready = proton_ready;
         status.proton_name = proton_name;
         status.allow_self_update = allow_self_update;
         status.native_shader_compiler = native_shader_compiler;
         status.account = account;
     });
+}
+
+fn open_studio(agent: &ureq::Agent, ctx: &mut Ctx) -> Result<()> {
+    let Some(session) = ctx.session.clone() else {
+        bail!("sign in first, the studio download needs your account");
+    };
+
+    if !ctx.config.studio_ready() {
+        ctx.config.studio = None;
+        ctx.shared.begin(Task::InstallingStudio);
+        ctx.config.studio = Some(studio::install(
+            agent,
+            &ctx.paths,
+            &ctx.shared,
+            ctx.shared.cancel_flag(),
+            &session.token,
+        )?);
+        ctx.config.save(&ctx.paths.config_file())?;
+        publish(ctx);
+    }
+
+    ctx.shared.begin(Task::LaunchingStudio);
+    ctx.shared
+        .update(|status| status.detail = "asking the server for a launch link".into());
+
+    let uri = match auth::studio_uri(&session.token) {
+        Ok(uri) => uri,
+        Err(err) if expired(&err) => {
+            session::clear(&ctx.paths.session_file());
+            ctx.session = None;
+            publish(ctx);
+            bail!("your session expired, sign in again");
+        }
+        Err(err) => return Err(err),
+    };
+
+    launch::launch_target(
+        &ctx.paths,
+        &ctx.config,
+        &ctx.shared,
+        launch::Target::Studio,
+        Some(&uri),
+    )
+}
+
+fn studio_uri(ctx: &mut Ctx, uri: String) -> Result<()> {
+    if !auth::is_studio_uri(&uri) {
+        bail!("that link is not a vortex-studio:// link");
+    }
+    if !ctx.config.studio_ready() || !ctx.config.proton_ready() {
+        ctx.shared
+            .log("studio link received, but the studio is not installed yet");
+        bail!("open the Studio from the launcher once to install it, then the link will work");
+    }
+
+    ctx.shared.begin(Task::LaunchingStudio);
+    ctx.shared.log("opening a studio link from the browser");
+    launch::launch_target(
+        &ctx.paths,
+        &ctx.config,
+        &ctx.shared,
+        launch::Target::Studio,
+        Some(&uri),
+    )
 }
 
 fn detect(ctx: &mut Ctx) -> Result<()> {
@@ -158,6 +228,9 @@ fn detect(ctx: &mut Ctx) -> Result<()> {
 
     if !ctx.config.game_ready() {
         ctx.config.game = None;
+    }
+    if !ctx.config.studio_ready() {
+        ctx.config.studio = None;
     }
     if !ctx.config.proton_ready() {
         ctx.config.proton = proton::detect_managed(&ctx.paths).or_else(proton::detect_system);

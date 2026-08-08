@@ -28,6 +28,10 @@ impl Paths {
         self.data.join("game")
     }
 
+    pub fn studio(&self) -> PathBuf {
+        self.data.join("studio")
+    }
+
     pub fn proton(&self) -> PathBuf {
         self.data.join("proton")
     }
@@ -64,6 +68,7 @@ impl Paths {
             self.data.clone(),
             self.config.clone(),
             self.game(),
+            self.studio(),
             self.proton(),
             self.prefix(),
             self.compat_client(),

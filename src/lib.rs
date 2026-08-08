@@ -16,4 +16,5 @@ pub mod proton;
 pub mod session;
 pub mod shaders;
 pub mod state;
+pub mod studio;
 pub mod worker;
