@@ -12,6 +12,8 @@ pub struct Config {
     pub game: Option<GameInstall>,
     pub studio: Option<GameInstall>,
     pub proton: Option<ProtonInstall>,
+    /// a build the user picked from the release list, downloaded on the next install
+    pub proton_wanted: Option<String>,
     /// on by default, a pinned old client cannot join a patched server
     pub allow_self_update: bool,
     /// off by default: it only helps the GPUs where vkd3d-shader miscompiles,
@@ -35,7 +37,8 @@ pub struct ProtonInstall {
     pub source: ProtonSource,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// ordered: a managed build is preferred over one borrowed from steam
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtonSource {
     Managed,
@@ -77,5 +80,41 @@ impl Config {
         self.proton
             .as_ref()
             .is_some_and(|p| crate::proton::is_usable(&p.dir))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// configs written before the picker existed must still load
+    #[test]
+    fn an_old_config_loads_without_the_wanted_field() {
+        let dir = std::env::temp_dir().join("vortex-config-compat");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, br#"{"allow_self_update":true,"native_shader_compiler":false}"#).unwrap();
+
+        let config = Config::load(&path);
+        assert!(config.allow_self_update);
+        assert!(config.proton_wanted.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_pending_pick_survives_a_save_and_load() {
+        let dir = std::env::temp_dir().join("vortex-config-wanted");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+
+        let mut config = Config::default();
+        config.proton_wanted = Some("GE-Proton9-27".into());
+        config.save(&path).unwrap();
+
+        let loaded = Config::load(&path);
+        assert_eq!(loaded.proton_wanted.as_deref(), Some("GE-Proton9-27"));
+        // nothing on disk yet, so the window falls back to the install screen
+        assert!(!loaded.proton_ready());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

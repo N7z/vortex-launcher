@@ -14,6 +14,8 @@ use crate::paths::Paths;
 use crate::state::Shared;
 
 const LATEST_RELEASE: &str = "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/latest";
+const RELEASE_LIST: &str = "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases?per_page=40";
+const RELEASE_BY_TAG: &str = "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases/tags/";
 
 /// where steam keeps proton builds
 fn system_candidates() -> Vec<PathBuf> {
@@ -84,28 +86,143 @@ fn builds_in(dir: &Path) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-pub fn detect_system() -> Option<ProtonInstall> {
-    let mut found: Vec<(String, PathBuf)> = system_candidates().iter().flat_map(|d| builds_in(d)).collect();
-    // prefer GE builds, then the highest name, which sorts newest last in practice
-    found.sort_by(|a, b| {
-        let ge = |n: &str| n.starts_with("GE-Proton");
-        ge(&a.0).cmp(&ge(&b.0)).then_with(|| a.0.cmp(&b.0))
-    });
-    found.pop().map(|(name, dir)| ProtonInstall {
-        name,
-        dir,
-        source: ProtonSource::System,
+/// a build on disk, plus whether this host can actually load it
+#[derive(Clone, Debug)]
+pub struct Build {
+    pub name: String,
+    pub dir: PathBuf,
+    pub source: ProtonSource,
+    /// highest GLIBC_x.y the build asks for, None when it cannot be read
+    pub needs_glibc: Option<(u32, u32)>,
+}
+
+impl Build {
+    /// unknown requirements count as fine, a guess is no reason to hide a build
+    pub fn runs_here(&self) -> bool {
+        match (self.needs_glibc, host_glibc()) {
+            (Some(needs), Some(host)) => needs <= host,
+            _ => true,
+        }
+    }
+
+    pub fn install(&self) -> ProtonInstall {
+        ProtonInstall {
+            name: self.name.clone(),
+            dir: self.dir.clone(),
+            source: self.source,
+        }
+    }
+}
+
+/// glibc of the running system, read once
+pub fn host_glibc() -> Option<(u32, u32)> {
+    use std::sync::OnceLock;
+
+    static CACHE: OnceLock<Option<(u32, u32)>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        let getconf = std::process::Command::new("getconf")
+            .arg("GNU_LIBC_VERSION")
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .and_then(|out| parse_glibc(&String::from_utf8_lossy(&out.stdout)));
+        getconf.or_else(|| {
+            let out = std::process::Command::new("ldd").arg("--version").output().ok()?;
+            let text = String::from_utf8_lossy(&out.stdout);
+            parse_glibc(text.lines().next()?)
+        })
     })
 }
 
-pub fn detect_managed(paths: &Paths) -> Option<ProtonInstall> {
-    let mut builds = builds_in(&paths.proton());
-    builds.sort();
-    builds.pop().map(|(name, dir)| ProtonInstall {
-        name,
-        dir,
-        source: ProtonSource::Managed,
+/// the last x.y in the line, which is where both getconf and ldd put it
+fn parse_glibc(text: &str) -> Option<(u32, u32)> {
+    text.split_whitespace().rev().find_map(|word| {
+        let word = word.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
+        let (major, minor) = word.split_once('.')?;
+        Some((major.parse().ok()?, minor.parse().ok()?))
     })
+}
+
+/// wine's unix side is what breaks first on an old host, so ask that file
+fn glibc_needed_by(dir: &Path) -> Option<(u32, u32)> {
+    [
+        "files/lib/wine/x86_64-unix/ntdll.so",
+        "files/lib64/wine/x86_64-unix/ntdll.so",
+        "files/bin/wineserver",
+    ]
+    .iter()
+    .map(|rel| dir.join(rel))
+    .find(|path| path.is_file())
+    .and_then(|path| max_glibc_tag(&path))
+}
+
+/// the version tags sit in .dynstr as plain ascii, so scanning beats parsing the ELF
+fn max_glibc_tag(path: &Path) -> Option<(u32, u32)> {
+    const NEEDLE: &[u8] = b"GLIBC_";
+
+    let bytes = std::fs::read(path).ok()?;
+    bytes
+        .windows(NEEDLE.len())
+        .enumerate()
+        .filter(|(_, window)| *window == NEEDLE)
+        .filter_map(|(at, _)| {
+            let tail = &bytes[at + NEEDLE.len()..];
+            let end = tail
+                .iter()
+                .position(|b| !b.is_ascii_digit() && *b != b'.')
+                .unwrap_or(tail.len());
+            parse_glibc(std::str::from_utf8(&tail[..end]).ok()?)
+        })
+        .max()
+}
+
+/// every build the launcher could use, managed first, newest-looking last
+pub fn available(paths: &Paths) -> Vec<Build> {
+    let managed = builds_in(&paths.proton())
+        .into_iter()
+        .map(|(name, dir)| (name, dir, ProtonSource::Managed));
+    let system: Vec<_> = system_candidates().iter().flat_map(|dir| builds_in(dir)).collect();
+    let system = system
+        .into_iter()
+        .map(|(name, dir)| (name, dir, ProtonSource::System));
+
+    let mut seen = std::collections::HashSet::new();
+    let mut builds: Vec<Build> = managed
+        .chain(system)
+        .filter(|(_, dir, _)| seen.insert(dir.clone()))
+        .map(|(name, dir, source)| Build {
+            needs_glibc: glibc_needed_by(&dir),
+            name,
+            dir,
+            source,
+        })
+        .collect();
+    // usable ones first, then managed, then by name
+    builds.sort_by(|a, b| {
+        b.runs_here()
+            .cmp(&a.runs_here())
+            .then_with(|| a.source.cmp(&b.source))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    builds
+}
+
+/// what to use when nothing is configured yet. a build this host cannot load is
+/// only picked when there is nothing else, so the error at least names a proton
+pub fn detect(paths: &Paths) -> Option<ProtonInstall> {
+    let builds = available(paths);
+    let pick = |managed: bool, runs: bool| {
+        builds
+            .iter()
+            .filter(|b| (b.source == ProtonSource::Managed) == managed && b.runs_here() == runs)
+            // highest name last, which is the newest in practice
+            .max_by(|a, b| a.name.cmp(&b.name))
+    };
+    pick(true, true)
+        .or_else(|| pick(false, true))
+        .or_else(|| pick(true, false))
+        .or_else(|| pick(false, false))
+        .map(Build::install)
 }
 
 struct Release {
@@ -130,11 +247,32 @@ fn checksum_for(tarball: &str) -> String {
     format!("{}.sha512sum", tarball.trim_end_matches(".tar.gz"))
 }
 
-fn latest_release(agent: &ureq::Agent) -> Result<Release> {
-    let body = net::get_text(agent, LATEST_RELEASE).context("cannot ask GitHub for GE-Proton")?;
+/// tags offered in the picker, newest first. an empty list just means no network
+pub fn releases(agent: &ureq::Agent) -> Result<Vec<String>> {
+    let body = net::get_text(agent, RELEASE_LIST).context("cannot ask GitHub for GE-Proton")?;
     let json: serde_json::Value =
         serde_json::from_str(&body).context("GitHub sent something that is not JSON")?;
+    Ok(json
+        .as_array()
+        .context("GitHub sent no release list")?
+        .iter()
+        .filter_map(|release| release["tag_name"].as_str())
+        .map(str::to_owned)
+        .collect())
+}
 
+fn latest_release(agent: &ureq::Agent) -> Result<Release> {
+    let body = net::get_text(agent, LATEST_RELEASE).context("cannot ask GitHub for GE-Proton")?;
+    release_from(&serde_json::from_str(&body).context("GitHub sent something that is not JSON")?)
+}
+
+fn release_by_tag(agent: &ureq::Agent, tag: &str) -> Result<Release> {
+    let url = format!("{RELEASE_BY_TAG}{tag}");
+    let body = net::get_text(agent, &url).with_context(|| format!("cannot find {tag} on GitHub"))?;
+    release_from(&serde_json::from_str(&body).context("GitHub sent something that is not JSON")?)
+}
+
+fn release_from(json: &serde_json::Value) -> Result<Release> {
     let tag = json["tag_name"]
         .as_str()
         .context("GitHub release has no tag")?
@@ -163,14 +301,19 @@ fn latest_release(agent: &ureq::Agent) -> Result<Release> {
     })
 }
 
+/// `tag` picks a specific build, None takes the newest one
 pub fn install(
     agent: &ureq::Agent,
     paths: &Paths,
     shared: &Arc<Shared>,
     cancel: &AtomicBool,
+    tag: Option<&str>,
 ) -> Result<ProtonInstall> {
-    let release = latest_release(agent)?;
-    shared.log(format!("latest proton is {}", release.tag));
+    let release = match tag {
+        Some(tag) => release_by_tag(agent, tag)?,
+        None => latest_release(agent)?,
+    };
+    shared.log(format!("installing proton {}", release.tag));
 
     if let Some(free) = crate::paths::free_space(&paths.data) {
         const NEEDED: u64 = 2 * 1024 * 1024 * 1024;
@@ -229,8 +372,11 @@ pub fn install(
     let dir = if existing.join("proton").is_file() {
         existing
     } else {
-        detect_managed(paths)
-            .map(|p| p.dir)
+        // the tag and the directory inside the tarball do not always match
+        builds_in(&paths.proton())
+            .into_iter()
+            .max_by(|a, b| a.0.cmp(&b.0))
+            .map(|(_, dir)| dir)
             .context("the Proton archive did not contain a proton script")?
     };
 
@@ -315,5 +461,44 @@ mod tests {
             checksum_for("GE-Proton11-3-aarch64.tar.gz"),
             "GE-Proton11-3-aarch64.sha512sum"
         );
+    }
+}
+
+#[cfg(test)]
+mod glibc_tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_version_from_getconf_and_ldd_shapes() {
+        assert_eq!(parse_glibc("glibc 2.35"), Some((2, 35)));
+        assert_eq!(parse_glibc("ldd (Ubuntu GLIBC 2.35-0ubuntu3.8) 2.35"), Some((2, 35)));
+        assert_eq!(parse_glibc("nothing here"), None);
+    }
+
+    #[test]
+    fn orders_minor_versions_as_numbers() {
+        assert!(parse_glibc("glibc 2.9") < parse_glibc("glibc 2.35"));
+        assert!(parse_glibc("glibc 2.38") < parse_glibc("glibc 3.0"));
+    }
+
+    #[test]
+    fn takes_the_highest_tag_in_the_file() {
+        let dir = std::env::temp_dir().join("vortex-glibc-scan");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("fake.so");
+        std::fs::write(&file, b"\x00GLIBC_2.2.5\x00GLIBC_2.38\x00GLIBC_2.9\x00").unwrap();
+        assert_eq!(max_glibc_tag(&file), Some((2, 38)));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_build_with_unreadable_requirements_is_not_hidden() {
+        let build = Build {
+            name: "GE-Proton9-27".into(),
+            dir: PathBuf::from("/nowhere"),
+            source: ProtonSource::Managed,
+            needs_glibc: None,
+        };
+        assert!(build.runs_here());
     }
 }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use eframe::egui::{self, Color32, RichText};
 
 use crate::paths::Paths;
-use crate::state::{GameRow, Shared};
+use crate::state::{GameRow, ProtonRow, Shared};
 use crate::worker::{Job, Worker};
 
 const CREDIT: &str = "Developed by zPaulinBRz | Logo by KitKat";
@@ -44,6 +44,7 @@ impl App {
 
         let worker = Worker::spawn(Arc::clone(&shared), paths);
         worker.send(Job::Detect);
+        worker.send(Job::LoadProtonReleases);
         if let Some(uri) = uri {
             worker.send(uri_job(uri));
         }
@@ -150,7 +151,7 @@ impl eframe::App for App {
 impl App {
     fn idle_controls(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) {
         if !snapshot.game_ready || !snapshot.proton_ready {
-            self.install_screen(ui);
+            self.install_screen(ui, snapshot);
             return;
         }
         if snapshot.account.is_none() {
@@ -160,17 +161,17 @@ impl App {
         self.play_screen(ui, snapshot);
     }
 
-    fn install_screen(&mut self, ui: &mut egui::Ui) {
+    fn install_screen(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) {
         ui.vertical_centered(|ui| {
             if big_button(ui, "Install").clicked() {
                 self.worker.send(Job::Setup);
             }
             ui.add_space(10.0);
-            ui.label(
-                RichText::new("first run downloads Vortex and Proton, about 500 MB")
-                    .size(11.0)
-                    .color(Color32::from_gray(140)),
-            );
+            let note = match &snapshot.proton_wanted {
+                Some(tag) => format!("downloads {tag} and whatever else is missing"),
+                None => "first run downloads Vortex and Proton, about 500 MB".to_owned(),
+            };
+            ui.label(RichText::new(note).size(11.0).color(Color32::from_gray(140)));
         });
     }
 
@@ -281,6 +282,71 @@ impl App {
             });
     }
 
+    fn proton_picker(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) {
+        if snapshot.proton_options.is_empty() {
+            return;
+        }
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Proton").size(11.0).color(Color32::from_gray(150)));
+            let current = snapshot.proton_name.clone().unwrap_or_else(|| "choose".into());
+            egui::ComboBox::from_id_salt("proton")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    let mut listed_downloadable = false;
+                    for option in &snapshot.proton_options {
+                        // one separator, right where the installed builds end
+                        if option.dir.is_none() && !listed_downloadable {
+                            listed_downloadable = true;
+                            ui.separator();
+                            ui.label(
+                                RichText::new("download")
+                                    .size(10.0)
+                                    .color(Color32::from_gray(120)),
+                            );
+                        }
+
+                        let selected = match &option.dir {
+                            Some(dir) => snapshot.proton_dir.as_deref() == Some(dir.as_path()),
+                            None => snapshot.proton_wanted.as_deref() == Some(option.name.as_str()),
+                        };
+                        let mut label = RichText::new(&option.name);
+                        if !option.runs_here {
+                            label = label.color(Color32::from_rgb(230, 140, 140));
+                        } else if option.dir.is_none() {
+                            label = label.color(Color32::from_gray(170));
+                        }
+
+                        let mut row = ui.selectable_label(selected, label);
+                        row = match (&option.dir, option.system, option.runs_here) {
+                            (_, _, false) => row.on_hover_text("needs a newer glibc than this system has"),
+                            (Some(dir), true, _) => {
+                                row.on_hover_text(format!("from Steam: {}", dir.display()))
+                            }
+                            (None, _, _) => row.on_hover_text("not downloaded yet, about 700 MB"),
+                            _ => row,
+                        };
+
+                        if row.clicked() && !selected {
+                            self.worker.send(match &option.dir {
+                                Some(dir) => Job::SelectProton(dir.clone()),
+                                None => Job::SelectProtonRelease(option.name.clone()),
+                            });
+                        }
+                    }
+                });
+        });
+
+        if snapshot.proton_mismatch {
+            ui.label(
+                RichText::new("this build needs a newer glibc than your system has, the game will not start")
+                    .size(11.0)
+                    .color(Color32::from_rgb(230, 140, 140)),
+            );
+        }
+        ui.add_space(4.0);
+    }
+
     fn footer(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) {
         ui.horizontal(|ui| {
             ui.label(
@@ -297,6 +363,8 @@ impl App {
                 }
             });
         });
+
+        self.proton_picker(ui, snapshot);
 
         let mut self_update = snapshot.allow_self_update;
         if ui
@@ -362,6 +430,10 @@ struct Snapshot {
     studio_running: bool,
     proton_ready: bool,
     proton_name: Option<String>,
+    proton_dir: Option<std::path::PathBuf>,
+    proton_mismatch: bool,
+    proton_wanted: Option<String>,
+    proton_options: Vec<ProtonRow>,
     game_running: bool,
     allow_self_update: bool,
     native_shader_compiler: bool,
@@ -384,6 +456,10 @@ impl Snapshot {
             studio_running: status.studio_running,
             proton_ready: status.proton_ready,
             proton_name: status.proton_name.clone(),
+            proton_dir: status.proton_dir.clone(),
+            proton_mismatch: status.proton_mismatch,
+            proton_wanted: status.proton_wanted.clone(),
+            proton_options: status.proton_options.clone(),
             game_running: status.game_running,
             allow_self_update: status.allow_self_update,
             native_shader_compiler: status.native_shader_compiler,

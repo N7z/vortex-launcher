@@ -7,7 +7,13 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use vortex_launcher::{
-    auth, config::Config, ipc, launch, net, paths::Paths, session, state::Shared, studio,
+    auth,
+    config::{Config, ProtonSource},
+    ipc, launch, net,
+    paths::Paths,
+    proton, session,
+    state::Shared,
+    studio,
 };
 
 const HELP: &str = "\
@@ -21,6 +27,8 @@ USAGE:
     vortex-launcher-cli games        list games and player counts
     vortex-launcher-cli play <id>    launch straight into a game
     vortex-launcher-cli studio       install (first time) and open Vortex Studio
+    vortex-launcher-cli proton       list Proton builds, installed and downloadable
+    vortex-launcher-cli proton <name>  use that build, downloading it if needed
     vortex-launcher-cli vortex://…   open a link from the browser (no GUI)
     vortex-launcher-cli help         show this help
 
@@ -48,6 +56,10 @@ fn run() -> Result<()> {
         Some("whoami") => whoami(&paths),
         Some("games") => games(),
         Some("studio") => open_studio(&paths),
+        Some("proton") => match args.get(1) {
+            None => list_proton(&paths),
+            Some(name) => pick_proton(&paths, name),
+        },
         Some("play") => {
             let id: u64 = args
                 .get(1)
@@ -74,6 +86,81 @@ fn run() -> Result<()> {
         }
         Some(other) => bail!("unknown command `{other}`\n\n{HELP}"),
     }
+}
+
+fn list_proton(paths: &Paths) -> Result<()> {
+    let builds = proton::available(paths);
+    let current = Config::load(&paths.config_file()).proton.map(|p| p.dir);
+    match proton::host_glibc() {
+        Some((major, minor)) => println!("system glibc {major}.{minor}\n"),
+        None => println!("cannot tell which glibc this system has\n"),
+    }
+    for build in &builds {
+        let mark = if current.as_deref() == Some(build.dir.as_path()) { "*" } else { " " };
+        let source = if build.source == ProtonSource::System { "steam" } else { "launcher" };
+        let note = match (build.runs_here(), build.needs_glibc) {
+            (false, Some((major, minor))) => format!("  needs glibc {major}.{minor}, too new for this system"),
+            _ => String::new(),
+        };
+        println!("{mark} {:<24} {source}{note}", build.name);
+    }
+    // the release list needs the network, so a failure here is not fatal
+    match proton::releases(&net::agent()) {
+        Ok(tags) => {
+            let missing: Vec<&String> = tags
+                .iter()
+                .filter(|tag| !builds.iter().any(|build| &&build.name == tag))
+                .collect();
+            if !missing.is_empty() {
+                println!("\nnot downloaded:");
+                for tag in missing {
+                    println!("  {tag}");
+                }
+            }
+        }
+        Err(err) => println!("\ncannot reach GitHub for the release list: {err:#}"),
+    }
+    println!("\n* is the one in use. pick another with: vortex-launcher-cli proton <name>");
+    Ok(())
+}
+
+fn pick_proton(paths: &Paths, name: &str) -> Result<()> {
+    let builds = proton::available(paths);
+    let found = builds
+        .iter()
+        .find(|b| b.name == name)
+        .or_else(|| builds.iter().find(|b| b.name.eq_ignore_ascii_case(name)))
+        .cloned();
+
+    // not on disk, so treat the name as a release tag and fetch it
+    let build = match found {
+        Some(build) => build,
+        None => {
+            let agent = net::agent();
+            let shared = Shared::new(&paths.logs().join("cli.log"));
+            paths.ensure()?;
+            println!("downloading {name}, this takes a while");
+            let installed = proton::install(&agent, paths, &shared, shared.cancel_flag(), Some(name))
+                .with_context(|| format!("no Proton called `{name}` (see `vortex-launcher-cli proton`)"))?;
+            proton::available(paths)
+                .into_iter()
+                .find(|b| b.dir == installed.dir)
+                .context("the build vanished right after being installed")?
+        }
+    };
+
+    let mut config = Config::load(&paths.config_file());
+    config.proton_wanted = None;
+    config.proton = Some(build.install());
+    config.save(&paths.config_file())?;
+
+    println!("now using {}", build.name);
+    if !build.runs_here() {
+        if let Some((major, minor)) = build.needs_glibc {
+            println!("warning: it needs glibc {major}.{minor}, newer than this system, the game will not start");
+        }
+    }
+    Ok(())
 }
 
 fn login(paths: &Paths) -> Result<()> {

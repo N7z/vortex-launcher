@@ -19,6 +19,9 @@ pub enum Job {
     Play,
     SetSelfUpdate(bool),
     SetNativeShaderCompiler(bool),
+    SelectProton(std::path::PathBuf),
+    SelectProtonRelease(String),
+    LoadProtonReleases,
     SignIn { username: String, password: String },
     Submit2fa(String),
     SignOut,
@@ -61,6 +64,8 @@ struct Ctx {
     selected_game: Option<u64>,
     /// a link that arrived before the game was installed
     pending_uri: Option<String>,
+    /// GE-Proton tags from GitHub, empty until the list loads
+    releases: Vec<String>,
 }
 
 fn run(shared: Arc<Shared>, paths: Paths, inbox: Receiver<Job>) {
@@ -76,6 +81,7 @@ fn run(shared: Arc<Shared>, paths: Paths, inbox: Receiver<Job>) {
         typed_username: String::new(),
         selected_game: None,
         pending_uri: None,
+        releases: Vec::new(),
     };
 
     while let Ok(job) = inbox.recv() {
@@ -90,6 +96,9 @@ fn run(shared: Arc<Shared>, paths: Paths, inbox: Receiver<Job>) {
                 ctx.config.save(&ctx.paths.config_file())
             }
             Job::SetNativeShaderCompiler(value) => set_native_shader_compiler(&mut ctx, value),
+            Job::SelectProton(dir) => select_proton(&mut ctx, &dir),
+            Job::SelectProtonRelease(tag) => want_proton(&mut ctx, tag),
+            Job::LoadProtonReleases => load_proton_releases(&agent, &mut ctx),
             Job::SignIn { username, password } => sign_in(&mut ctx, &username, &password),
             Job::Submit2fa(code) => submit_2fa(&mut ctx, &code),
             Job::SignOut => sign_out(&mut ctx),
@@ -136,6 +145,34 @@ fn publish(ctx: &Ctx) {
     let studio_ready = ctx.config.studio_ready();
     let proton_ready = ctx.config.proton_ready();
     let proton_name = ctx.config.proton.as_ref().map(|p| p.name.clone());
+    let proton_dir = ctx.config.proton.as_ref().map(|p| p.dir.clone());
+    let builds = proton::available(&ctx.paths);
+    let proton_mismatch = proton_dir
+        .as_ref()
+        .and_then(|dir| builds.iter().find(|b| &b.dir == dir))
+        .is_some_and(|build| !build.runs_here());
+    let mut proton_options: Vec<crate::state::ProtonRow> = builds
+        .iter()
+        .map(|build| crate::state::ProtonRow {
+            name: build.name.clone(),
+            dir: Some(build.dir.clone()),
+            system: build.source == crate::config::ProtonSource::System,
+            runs_here: build.runs_here(),
+        })
+        .collect();
+    // releases already on disk are listed once, as the local build
+    proton_options.extend(
+        ctx.releases
+            .iter()
+            .filter(|tag| !builds.iter().any(|build| &&build.name == tag))
+            .map(|tag| crate::state::ProtonRow {
+                name: tag.clone(),
+                dir: None,
+                system: false,
+                runs_here: true,
+            }),
+    );
+    let proton_wanted = ctx.config.proton_wanted.clone();
     let allow_self_update = ctx.config.allow_self_update;
     let native_shader_compiler = ctx.config.native_shader_compiler;
     let account = ctx.session.as_ref().map(|s| s.username.clone());
@@ -144,10 +181,55 @@ fn publish(ctx: &Ctx) {
         status.studio_ready = studio_ready;
         status.proton_ready = proton_ready;
         status.proton_name = proton_name;
+        status.proton_dir = proton_dir;
+        status.proton_mismatch = proton_mismatch;
+        status.proton_wanted = proton_wanted;
+        status.proton_options = proton_options;
         status.allow_self_update = allow_self_update;
         status.native_shader_compiler = native_shader_compiler;
         status.account = account;
     });
+}
+
+/// an explicit pick is honoured even when this host cannot load it: the UI already
+/// says so, and overruling the user would leave the dropdown lying about the choice
+fn select_proton(ctx: &mut Ctx, dir: &std::path::Path) -> Result<()> {
+    let Some(build) = proton::available(&ctx.paths).into_iter().find(|b| b.dir == dir) else {
+        bail!("that Proton is no longer in {}", dir.display());
+    };
+    if !build.runs_here() {
+        ctx.shared
+            .log(format!("{} needs a newer glibc than this system has", build.name));
+    }
+    ctx.shared.log(format!("using {}", build.name));
+    ctx.config.proton_wanted = None;
+    ctx.config.proton = Some(build.install());
+    ctx.config.save(&ctx.paths.config_file())?;
+    publish(ctx);
+    Ok(())
+}
+
+/// picking a build that is not downloaded clears the current one, which drops the
+/// window back to the install screen. that button then fetches this exact tag
+fn want_proton(ctx: &mut Ctx, tag: String) -> Result<()> {
+    ctx.shared.log(format!("{tag} is not downloaded yet, install will fetch it"));
+    ctx.config.proton = None;
+    ctx.config.proton_wanted = Some(tag);
+    ctx.config.save(&ctx.paths.config_file())?;
+    publish(ctx);
+    Ok(())
+}
+
+/// best effort: with no network the picker just lists what is already on disk
+fn load_proton_releases(agent: &ureq::Agent, ctx: &mut Ctx) -> Result<()> {
+    match proton::releases(agent) {
+        Ok(tags) => {
+            ctx.releases = tags;
+            publish(ctx);
+        }
+        Err(err) => ctx.shared.log(format!("cannot list Proton releases: {}", describe(&err))),
+    }
+    Ok(())
 }
 
 fn open_studio(agent: &ureq::Agent, ctx: &mut Ctx) -> Result<()> {
@@ -232,8 +314,10 @@ fn detect(ctx: &mut Ctx) -> Result<()> {
     if !ctx.config.studio_ready() {
         ctx.config.studio = None;
     }
-    if !ctx.config.proton_ready() {
-        ctx.config.proton = proton::detect_managed(&ctx.paths).or_else(proton::detect_system);
+    // a pending pick outranks autodetection, otherwise choosing a build that is
+    // not downloaded yet would be undone by the next detect
+    if !ctx.config.proton_ready() && ctx.config.proton_wanted.is_none() {
+        ctx.config.proton = proton::detect(&ctx.paths);
         if let Some(found) = &ctx.config.proton {
             ctx.shared.log(format!("found {}", found.name));
         }
@@ -269,17 +353,22 @@ fn detect(ctx: &mut Ctx) -> Result<()> {
 fn setup(agent: &ureq::Agent, ctx: &mut Ctx) -> Result<()> {
     ctx.paths.ensure()?;
 
-    if !ctx.config.proton_ready() {
-        ctx.config.proton = proton::detect_managed(&ctx.paths).or_else(proton::detect_system);
+    if !ctx.config.proton_ready() && ctx.config.proton_wanted.is_none() {
+        ctx.config.proton = proton::detect(&ctx.paths);
     }
     if !ctx.config.proton_ready() {
         ctx.shared.begin(Task::InstallingProton);
-        ctx.config.proton = Some(proton::install(
+        let wanted = ctx.config.proton_wanted.clone();
+        let installed = proton::install(
             agent,
             &ctx.paths,
             &ctx.shared,
             ctx.shared.cancel_flag(),
-        )?);
+            wanted.as_deref(),
+        )?;
+        // clearing it only after a good install means a failed download can be retried
+        ctx.config.proton_wanted = None;
+        ctx.config.proton = Some(installed);
         ctx.config.save(&ctx.paths.config_file())?;
         publish(ctx);
     }

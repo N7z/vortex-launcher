@@ -42,6 +42,19 @@ pub struct GameRow {
     pub players: u64,
 }
 
+/// one entry of the Proton dropdown
+#[derive(Clone, Debug)]
+pub struct ProtonRow {
+    pub name: String,
+    /// None for a release that is not downloaded yet
+    pub dir: Option<std::path::PathBuf>,
+    /// borrowed from a steam install rather than downloaded by the launcher
+    pub system: bool,
+    /// false when the build wants a newer glibc than this system has.
+    /// always true for a release not on disk, there is nothing to inspect
+    pub runs_here: bool,
+}
+
 #[derive(Default)]
 pub struct Status {
     pub task: Option<Task>,
@@ -53,6 +66,12 @@ pub struct Status {
     pub studio_running: bool,
     pub proton_ready: bool,
     pub proton_name: Option<String>,
+    pub proton_dir: Option<std::path::PathBuf>,
+    /// the chosen build cannot be loaded here, the game would die on launch
+    pub proton_mismatch: bool,
+    /// a release picked from the list but not downloaded yet
+    pub proton_wanted: Option<String>,
+    pub proton_options: Vec<ProtonRow>,
     pub game_running: bool,
     pub allow_self_update: bool,
     pub native_shader_compiler: bool,

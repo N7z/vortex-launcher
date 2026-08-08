@@ -12,7 +12,7 @@
 set -eu
 
 PROTON_TAG=GE-Proton9-27
-PROTON_NEEDS=2.38   # glibc that GE-Proton 10 and later require
+PROTON_NEEDS=2.38   # what the newest GE-Proton wants; older builds need only 2.25
 DATA="${XDG_DATA_HOME:-$HOME/.local/share}/vortex-launcher"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/vortex-launcher/config.json"
 
