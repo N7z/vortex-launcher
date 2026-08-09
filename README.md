@@ -29,8 +29,8 @@ The other two Linux launchers are [Riko](https://github.com/Arbuzyonak/Riko) (Ta
 | binary | 7.9 MB GUI, 1.8 MB CLI | 12.7 MB | 5.5 MB |
 | RAM idle | ~55 MiB PSS | ~226 MiB PSS | none |
 | you must install | nothing | Wine, webkit2gtk | Wine (its installer does it) |
-| wine | downloads GE-Proton itself | system Wine | system Wine |
-| scope | launch games | library, plugins, overlays, friends, stats | setup, login, play, doctor |
+| wine | GE-Proton | system Wine | system Wine |
+| scope | launch games and studio | library, plugins, overlays, friends, stats | setup, login, play, doctor |
 
 Measured on my machine (Arch, Wayland, Mesa): 7.9 MB stripped, window up in ~40 ms, 55 MiB PSS idle (123 MiB RSS, most of it shared Mesa pages).
 
